@@ -29,14 +29,40 @@ modern browser — no build step, no server, no dependencies.
 
 ## Element types
 
-- **Rectangle** — `<rect>` with 8-point resize handles.
-- **Ellipse / Circle** — center + cardinal handles.
-- **Line** — two endpoint handles.
-- **Text** — position handle; content / font-size / font-family in the inspector.
-- **Path** — full SVG path data (`M L H V C S Q T A Z`). Each segment is parsed
-  into `{cmd, params}`; click an endpoint dot to select a segment, then drag its
-  endpoint or control points. The inspector lists every segment with a cmd
-  dropdown, abs/rel toggle (preserves geometry), insert-after, and delete.
+- **Rectangle** (`<rect>`) — x, y, width, height.
+- **Ellipse** (`<ellipse>`) — cx, cy, rx, ry.
+- **Circle** (`<circle>`) — cx, cy, r.
+- **Line** (`<line>`) — two endpoints `(x1, y1)` and `(x2, y2)`. Drag the
+  endpoint dots to move them individually. Lines don't get bbox scale
+  handles (the bbox collapses to a line when the segment is axis-aligned).
+- **Text** (`<text>`) — position handle at the baseline start. Inspector
+  controls for content, font-size (integer arrow stepping, decimal typing
+  OK), and font-family.
+- **Polyline / Polygon** (`<polyline>` / `<polygon>`) — list of vertex
+  points. Click a vertex dot to select it; drag to move. The inspector
+  lists every vertex with x/y inputs, insert-after, and delete. Polygon
+  closes the path implicitly; polyline doesn't.
+- **Path** (`<path>`) — full SVG path data (`M L H V C S Q T A Z`). Each
+  segment is parsed into `{cmd, params}`. Click an endpoint dot to select
+  a segment, then drag its endpoint or control points. The inspector
+  lists every segment with a cmd dropdown (rendered in upper or lower
+  case to match the segment), an abs/rel toggle (preserves visual
+  geometry across the conversion), per-parameter inputs, insert-after,
+  and delete.
+- **Image** (`<image>`) — file or URL reference. The Image tool opens a
+  file picker on canvas click and writes
+  `href="<prefix><filename>"` (default prefix `image/`); the picked file
+  itself is rendered in the editor via an in-session `blob:` URL so you
+  see it while you work without bloating the saved SVG. Inspector
+  controls: source display, Prefix input (sticky across adds), *From
+  file…*, *From URL…*, Align (nine alignments plus `none (stretch)`),
+  Mode (`meet` / `slice`).
+
+All types except line also expose 8 bbox scale handles (4 corners +
+4 edge midpoints). Drag a corner to scale around the opposite corner;
+hold **Shift** to lock the aspect ratio. Drag an edge midpoint to scale
+on one axis only. Precision is intentionally not snapped during a
+scale drag — use **Snap to precision** afterward if you want.
 
 ## Precision
 
