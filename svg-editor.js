@@ -56,6 +56,14 @@ const TYPES = {
             a.height = Math.abs(y2 - y1);
         },
         translate: (a, dx, dy) => { a.x += dx; a.y += dy; },
+        scaleAround: (a, anchor, sx, sy) => {
+            a.x = anchor.x + (a.x - anchor.x) * sx;
+            a.y = anchor.y + (a.y - anchor.y) * sy;
+            a.width *= sx;
+            a.height *= sy;
+            if (a.width < 0)  { a.x += a.width;  a.width  = -a.width;  }
+            if (a.height < 0) { a.y += a.height; a.height = -a.height; }
+        },
     },
 
     ellipse: {
@@ -76,6 +84,12 @@ const TYPES = {
             else if (name === 'n' || name === 's') a.ry = Math.max(0, Math.abs(p.y - a.cy));
         },
         translate: (a, dx, dy) => { a.cx += dx; a.cy += dy; },
+        scaleAround: (a, anchor, sx, sy) => {
+            a.cx = anchor.x + (a.cx - anchor.x) * sx;
+            a.cy = anchor.y + (a.cy - anchor.y) * sy;
+            a.rx = Math.abs(a.rx * sx);
+            a.ry = Math.abs(a.ry * sy);
+        },
     },
 
     circle: {
@@ -95,6 +109,11 @@ const TYPES = {
             else a.r = Math.max(0, Math.hypot(p.x - a.cx, p.y - a.cy));
         },
         translate: (a, dx, dy) => { a.cx += dx; a.cy += dy; },
+        scaleAround: (a, anchor, sx, sy) => {
+            a.cx = anchor.x + (a.cx - anchor.x) * sx;
+            a.cy = anchor.y + (a.cy - anchor.y) * sy;
+            a.r = Math.abs(a.r * (Math.abs(sx) + Math.abs(sy)) / 2);
+        },
     },
 
     line: {
@@ -116,6 +135,12 @@ const TYPES = {
             else { a.x2 = p.x; a.y2 = p.y; }
         },
         translate: (a, dx, dy) => { a.x1 += dx; a.y1 += dy; a.x2 += dx; a.y2 += dy; },
+        scaleAround: (a, anchor, sx, sy) => {
+            a.x1 = anchor.x + (a.x1 - anchor.x) * sx;
+            a.y1 = anchor.y + (a.y1 - anchor.y) * sy;
+            a.x2 = anchor.x + (a.x2 - anchor.x) * sx;
+            a.y2 = anchor.y + (a.y2 - anchor.y) * sy;
+        },
     },
 
     text: {
@@ -130,6 +155,12 @@ const TYPES = {
             if (name === 'pos') { a.x = p.x; a.y = p.y; }
         },
         translate: (a, dx, dy) => { a.x += dx; a.y += dy; },
+        scaleAround: (a, anchor, sx, sy) => {
+            a.x = anchor.x + (a.x - anchor.x) * sx;
+            a.y = anchor.y + (a.y - anchor.y) * sy;
+            const f = Math.abs((sx + sy) / 2);
+            if (typeof a['font-size'] === 'number') a['font-size'] = a['font-size'] * f;
+        },
     },
 
     path: {
@@ -178,6 +209,39 @@ const TYPES = {
                         seg.params[2] += dx; seg.params[3] += dy; break;
                     case 'A':
                         seg.params[5] += dx; seg.params[6] += dy; break;
+                }
+            }
+        },
+        scaleAround: (a, anchor, sx, sy) => {
+            const segs = a.segments || [];
+            for (let i = 0; i < segs.length; i++) {
+                const seg = segs[i];
+                const upper = seg.cmd.toUpperCase();
+                const isAbs = (seg.cmd === upper);
+                const isFirstM = (i === 0 && upper === 'M');
+                const treatAbs = isAbs || isFirstM;
+                const scX = v => treatAbs ? (anchor.x + (v - anchor.x) * sx) : (v * sx);
+                const scY = v => treatAbs ? (anchor.y + (v - anchor.y) * sy) : (v * sy);
+                switch (upper) {
+                    case 'M': case 'L': case 'T':
+                        seg.params[0] = scX(seg.params[0]);
+                        seg.params[1] = scY(seg.params[1]); break;
+                    case 'H':
+                        seg.params[0] = scX(seg.params[0]); break;
+                    case 'V':
+                        seg.params[0] = scY(seg.params[0]); break;
+                    case 'C':
+                        seg.params[0] = scX(seg.params[0]); seg.params[1] = scY(seg.params[1]);
+                        seg.params[2] = scX(seg.params[2]); seg.params[3] = scY(seg.params[3]);
+                        seg.params[4] = scX(seg.params[4]); seg.params[5] = scY(seg.params[5]); break;
+                    case 'S': case 'Q':
+                        seg.params[0] = scX(seg.params[0]); seg.params[1] = scY(seg.params[1]);
+                        seg.params[2] = scX(seg.params[2]); seg.params[3] = scY(seg.params[3]); break;
+                    case 'A':
+                        seg.params[0] = Math.abs(seg.params[0] * sx);
+                        seg.params[1] = Math.abs(seg.params[1] * sy);
+                        seg.params[5] = scX(seg.params[5]);
+                        seg.params[6] = scY(seg.params[6]); break;
                 }
             }
         },
@@ -714,6 +778,24 @@ function renderHtmlRulers() {
     }
 }
 
+function bboxHandlePos(dir, bb) {
+    const isE = dir.includes('e');
+    const isW = dir.includes('w');
+    const isN = dir.includes('n');
+    const isS = dir.includes('s');
+    return {
+        x: isE ? bb.x + bb.width  : (isW ? bb.x : bb.x + bb.width / 2),
+        y: isS ? bb.y + bb.height : (isN ? bb.y : bb.y + bb.height / 2),
+    };
+}
+
+function bboxAnchor(dir, bb) {
+    const opp = { n: 's', s: 'n', e: 'w', w: 'e' };
+    let oppositeDir = '';
+    for (const ch of dir) oppositeDir += opp[ch];
+    return bboxHandlePos(oppositeDir, bb);
+}
+
 function renderHandles() {
     while (handlesLayer.firstChild) handlesLayer.removeChild(handlesLayer.firstChild);
     if (!state.selectedId) return;
@@ -733,13 +815,32 @@ function renderHandles() {
         handlesLayer.appendChild(outline);
     }
 
+    // Bbox scale handles: shown for any element with a non-degenerate bbox.
+    if (bb && bb.width > 0 && bb.height > 0) {
+        for (const d of ['nw','n','ne','e','se','s','sw','w']) {
+            const p = bboxHandlePos(d, bb);
+            const sq = document.createElementNS(SVG_NS, 'rect');
+            sq.setAttribute('class', `handle h-${d}`);
+            sq.setAttribute('x', p.x - HANDLE_SIZE / 2);
+            sq.setAttribute('y', p.y - HANDLE_SIZE / 2);
+            sq.setAttribute('width', HANDLE_SIZE);
+            sq.setAttribute('height', HANDLE_SIZE);
+            sq.setAttribute('data-handle', 'scale-' + d);
+            handlesLayer.appendChild(sq);
+        }
+    }
+
     if (el.type === 'path') {
         renderPathHandles(el);
         return;
     }
 
-    const handles = def.handles ? def.handles(el.attrs) : [];
-    for (const h of handles) {
+    // Per-type specialty handles (line endpoints, text pos).
+    // Rect/ellipse/circle no longer need their own handles — bbox handles cover them.
+    const specialty = (el.type === 'line' || el.type === 'text') && def.handles
+        ? def.handles(el.attrs)
+        : [];
+    for (const h of specialty) {
         const sq = document.createElementNS(SVG_NS, 'rect');
         sq.setAttribute('class', `handle h-${h.kind}`);
         sq.setAttribute('x', h.x - HANDLE_SIZE / 2);
@@ -1434,6 +1535,25 @@ canvas.addEventListener('pointerdown', (e) => {
         const el = findElement(state.selectedId);
         if (!el) return;
         const handleName = handleEl.dataset.handle;
+
+        // Bbox scale handle
+        if (handleName.startsWith('scale-')) {
+            const dir = handleName.slice(6);
+            const bb = computeBBox(el);
+            if (bb) {
+                drag = {
+                    kind: 'scale',
+                    dir,
+                    anchor: bboxAnchor(dir, bb),
+                    origBBox: { x: bb.x, y: bb.y, width: bb.width, height: bb.height },
+                    startAttrs: cloneAttrs(el.attrs),
+                };
+                canvas.setPointerCapture(e.pointerId);
+                e.preventDefault();
+            }
+            return;
+        }
+
         // Path: segment dot click selects the segment; cp/end drag edits the segment.
         if (el.type === 'path') {
             const segIdxStr = handleEl.dataset.segmentIdx;
@@ -1513,6 +1633,26 @@ canvas.addEventListener('pointermove', (e) => {
         const dy = p.y - drag.startPoint.y;
         el.attrs = cloneAttrs(drag.startAttrs);
         def.translate(el.attrs, dx, dy);
+        snapGeom(el, state.precision);
+    } else if (drag.kind === 'scale') {
+        // Scale relative to the bbox at drag-start. Precision is intentionally
+        // NOT honored for scale (per spec).
+        const bb = drag.origBBox;
+        const anchor = drag.anchor;
+        const orig = bboxHandlePos(drag.dir, bb);
+        const hasX = drag.dir.includes('e') || drag.dir.includes('w');
+        const hasY = drag.dir.includes('n') || drag.dir.includes('s');
+        let sx = 1, sy = 1;
+        if (hasX && (orig.x - anchor.x) !== 0) sx = (p.x - anchor.x) / (orig.x - anchor.x);
+        if (hasY && (orig.y - anchor.y) !== 0) sy = (p.y - anchor.y) / (orig.y - anchor.y);
+        const isCorner = (drag.dir.length === 2);
+        if (isCorner && e.shiftKey) {
+            const mag = Math.max(Math.abs(sx), Math.abs(sy));
+            sx = Math.sign(sx || 1) * mag;
+            sy = Math.sign(sy || 1) * mag;
+        }
+        el.attrs = cloneAttrs(drag.startAttrs);
+        if (def.scaleAround) def.scaleAround(el.attrs, anchor, sx, sy);
     } else if (drag.kind === 'path-handle') {
         el.attrs = cloneAttrs(drag.startAttrs);
         const snapped = state.precision === 'free'
@@ -1522,8 +1662,8 @@ canvas.addEventListener('pointermove', (e) => {
     } else {
         el.attrs = { ...drag.startAttrs };
         def.applyHandle(el.attrs, drag.handleName, p);
+        snapGeom(el, state.precision);
     }
-    snapGeom(el, state.precision);
     render();
 });
 
