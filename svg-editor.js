@@ -22,6 +22,7 @@ const state = {
     nextId: 1,
     precision: 1, // 0..4 (decimal places) or 'free'
     grid: { enabled: false, spacing: 20 },
+    lastImagePrefix: 'image/', // sticky default for new <image> href prefixes
 };
 
 // ===== Per-type behavior =====
@@ -1143,9 +1144,28 @@ function updateInspector() {
         if (document.activeElement !== alignSel) alignSel.value = par.align;
         if (document.activeElement !== modeSel) modeSel.value = par.mode;
         modeSel.disabled = (par.align === 'none');
+        const prefixInput = document.getElementById('i-image-prefix');
+        const isDataUri = (el.attrs.href || '').startsWith('data:');
+        prefixInput.disabled = isDataUri;
+        if (document.activeElement !== prefixInput) {
+            prefixInput.value = isDataUri ? '' : hrefPrefix(el.attrs.href || '');
+        }
     } else {
         imageGroup.hidden = true;
     }
+}
+
+function hrefPrefix(href) {
+    if (!href || href.startsWith('data:')) return '';
+    const idx = href.lastIndexOf('/');
+    return idx < 0 ? '' : href.slice(0, idx + 1);
+}
+
+function hrefFilename(href) {
+    if (!href) return '';
+    if (href.startsWith('data:')) return '';
+    const idx = href.lastIndexOf('/');
+    return idx < 0 ? href : href.slice(idx + 1);
 }
 
 function parsePreserveAspectRatio(value) {
@@ -2250,8 +2270,8 @@ async function startImagePlacement(point) {
         y: point.y,
         width: dims.width,
         height: dims.height,
-        href: file.name,         // canonical: bare filename for serialization
-        _displayHref: displayUrl, // session-only: blob URL for editor rendering
+        href: state.lastImagePrefix + file.name, // prefix + filename, written to source
+        _displayHref: displayUrl,                 // session-only blob URL for editor rendering
         preserveAspectRatio: 'xMidYMid meet',
     };
     const el = { id: nextId('image'), type: 'image', attrs };
@@ -2270,7 +2290,9 @@ async function replaceSelectedImageFromFile() {
     flushDebounce();
     revokeDisplayHref(el.attrs);
     el.attrs._displayHref = URL.createObjectURL(file);
-    el.attrs.href = file.name;
+    // Preserve the image's existing prefix if it has one; otherwise use the sticky default.
+    const curPrefix = hrefPrefix(el.attrs.href || '') || state.lastImagePrefix;
+    el.attrs.href = curPrefix + file.name;
     render();
     pushHistory();
 }
@@ -2305,6 +2327,18 @@ function applyImagePreserveAspectRatio() {
 }
 document.getElementById('i-image-align').addEventListener('change', applyImagePreserveAspectRatio);
 document.getElementById('i-image-mode').addEventListener('change', applyImagePreserveAspectRatio);
+
+document.getElementById('i-image-prefix').addEventListener('input', (e) => {
+    const prefix = e.target.value;
+    state.lastImagePrefix = prefix; // sticky for future adds
+    const el = findElement(state.selectedId);
+    if (!el || el.type !== 'image') return;
+    const cur = el.attrs.href || '';
+    if (cur.startsWith('data:')) return;
+    el.attrs.href = prefix + hrefFilename(cur);
+    render();
+    pushHistoryDebounced();
+});
 
 document.getElementById('btn-save-source').addEventListener('click', saveSourceToFile);
 const fileInput = document.getElementById('file-input');
