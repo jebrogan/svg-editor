@@ -1251,6 +1251,7 @@ function showSourceStatus(msg, isError) {
 
 // ===== Tool / palette =====
 function setTool(tool) {
+    if (tool !== 'select' && !TYPES[tool]) return;
     state.tool = tool;
     toolNameEl.textContent = tool;
     updateToolUI();
@@ -1264,7 +1265,7 @@ function updateToolUI() {
 }
 
 palette.addEventListener('click', (e) => {
-    const btn = e.target.closest('.tool-btn');
+    const btn = e.target.closest('.tool-btn[data-tool]');
     if (!btn) return;
     setTool(btn.dataset.tool);
 });
@@ -1433,6 +1434,51 @@ document.getElementById('btn-clear').addEventListener('click', () => {
     state.selectedId = null;
     render();
 });
+
+function duplicateSelected() {
+    if (!state.selectedId) return;
+    const el = findElement(state.selectedId);
+    if (!el) return;
+    const newAttrs = cloneAttrs(el.attrs);
+    const def = TYPES[el.type];
+    if (def.translate) def.translate(newAttrs, 10, 10);
+    const newEl = { id: nextId(el.type), type: el.type, attrs: newAttrs };
+    state.elements.push(newEl);
+    state.selectedId = newEl.id;
+    state.selectedSegmentIdx = null;
+    render();
+}
+
+function snapSelectedToPrecision() {
+    if (!state.selectedId) return;
+    if (state.precision === 'free') return;
+    const el = findElement(state.selectedId);
+    if (!el) return;
+    const prec = state.precision;
+    const def = TYPES[el.type];
+    for (const f of (def.geomFields || [])) {
+        if (typeof el.attrs[f] === 'number') el.attrs[f] = roundTo(el.attrs[f], prec);
+    }
+    if (typeof el.attrs['stroke-width'] === 'number') {
+        el.attrs['stroke-width'] = roundTo(el.attrs['stroke-width'], prec);
+    }
+    if (el.type === 'text' && typeof el.attrs['font-size'] === 'number') {
+        el.attrs['font-size'] = roundTo(el.attrs['font-size'], prec);
+    }
+    if (el.type === 'path' && Array.isArray(el.attrs.segments)) {
+        for (const seg of el.attrs.segments) {
+            for (let i = 0; i < seg.params.length; i++) {
+                if (typeof seg.params[i] === 'number') {
+                    seg.params[i] = roundTo(seg.params[i], prec);
+                }
+            }
+        }
+    }
+    render();
+}
+
+document.getElementById('btn-duplicate').addEventListener('click', duplicateSelected);
+document.getElementById('btn-snap-precision').addEventListener('click', snapSelectedToPrecision);
 applyBtn.addEventListener('click', applySource);
 sourceEl.addEventListener('input', () => {
     applyBtn.disabled = sourceEl.value === canonicalSource;
