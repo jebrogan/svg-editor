@@ -398,6 +398,95 @@ const NUMERIC_ATTRS = new Set([
     'x1','y1','x2','y2','stroke-width','fill-opacity','font-size'
 ]);
 
+// ===== Undo / redo history =====
+const HISTORY_MAX = 100;
+const history = {
+    stack: [],
+    index: -1,
+};
+
+function takeSnapshot() {
+    return JSON.parse(JSON.stringify(state.elements));
+}
+
+function pushHistory() {
+    if (_debounceTimer) {
+        clearTimeout(_debounceTimer);
+        _debounceTimer = null;
+    }
+    const snap = takeSnapshot();
+    history.stack.length = history.index + 1;
+    if (history.stack.length > 0) {
+        const last = history.stack[history.stack.length - 1];
+        if (JSON.stringify(last) === JSON.stringify(snap)) return;
+    }
+    history.stack.push(snap);
+    if (history.stack.length > HISTORY_MAX) history.stack.shift();
+    history.index = history.stack.length - 1;
+    updateUndoButtons();
+}
+
+let _debounceTimer = null;
+function pushHistoryDebounced(delay = 500) {
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(() => {
+        _debounceTimer = null;
+        pushHistory();
+    }, delay);
+}
+
+function flushDebounce() {
+    if (_debounceTimer) {
+        clearTimeout(_debounceTimer);
+        _debounceTimer = null;
+        pushHistory();
+    }
+}
+
+function restoreSnapshot(snap) {
+    state.elements = JSON.parse(JSON.stringify(snap));
+    // Validate selection
+    if (state.selectedId && !findElement(state.selectedId)) {
+        state.selectedId = null;
+        state.selectedSegmentIdx = null;
+    } else if (state.selectedId) {
+        const el = findElement(state.selectedId);
+        if (!el || el.type !== 'path') {
+            state.selectedSegmentIdx = null;
+        } else if (state.selectedSegmentIdx != null &&
+                   !(el.attrs.segments && el.attrs.segments[state.selectedSegmentIdx])) {
+            state.selectedSegmentIdx = null;
+        }
+    }
+    segmentsBuiltSig = null;
+    inspectorBuiltForId = null;
+    render();
+}
+
+function undo() {
+    if (history.index <= 0) return;
+    flushDebounce();
+    // After flush, index may have advanced; recheck.
+    if (history.index <= 0) return;
+    history.index--;
+    restoreSnapshot(history.stack[history.index]);
+    updateUndoButtons();
+}
+
+function redo() {
+    if (history.index >= history.stack.length - 1) return;
+    history.index++;
+    restoreSnapshot(history.stack[history.index]);
+    updateUndoButtons();
+}
+
+function updateUndoButtons() {
+    const u = document.getElementById('btn-undo');
+    const r = document.getElementById('btn-redo');
+    if (u) u.disabled = (history.index <= 0);
+    if (r) r.disabled = (history.index >= history.stack.length - 1);
+}
+
 // ===== Precision helpers =====
 function precisionStep(prec) {
     if (prec === 'free') return 1;
@@ -440,10 +529,14 @@ function attachNumeric(input, opts) {
         const next = roundTo(base + (e.key === 'ArrowUp' ? step : -step), prec);
         input.value = formatNum(next, prec);
         opts.onChange(next);
+        pushHistory();
     });
     input.addEventListener('input', () => {
         const v = parseFloat(input.value);
-        if (!Number.isNaN(v)) opts.onChange(v);
+        if (!Number.isNaN(v)) {
+            opts.onChange(v);
+            pushHistoryDebounced();
+        }
     });
 }
 
@@ -886,6 +979,7 @@ function buildSegmentRow(el, idx) {
         sel.appendChild(opt);
     }
     sel.addEventListener('change', (ev) => {
+        flushDebounce();
         const newUpper = ev.target.value;
         const wasAbs = (el.attrs.segments[idx].cmd === el.attrs.segments[idx].cmd.toUpperCase());
         const newCmd = wasAbs ? newUpper : newUpper.toLowerCase();
@@ -897,6 +991,7 @@ function buildSegmentRow(el, idx) {
         };
         segmentsBuiltSig = null;
         render();
+        pushHistory();
     });
     head.appendChild(sel);
 
@@ -905,8 +1000,10 @@ function buildSegmentRow(el, idx) {
     relBtn.title = 'Toggle absolute / relative';
     relBtn.textContent = isAbs ? 'A' : 'r';
     relBtn.addEventListener('click', () => {
+        flushDebounce();
         toggleSegmentAbs(el.attrs.segments, idx);
         render();
+        pushHistory();
     });
     head.appendChild(relBtn);
 
@@ -915,11 +1012,13 @@ function buildSegmentRow(el, idx) {
     delBtn.title = 'Delete segment';
     delBtn.textContent = '×';
     delBtn.addEventListener('click', () => {
+        flushDebounce();
         el.attrs.segments.splice(idx, 1);
         if (state.selectedSegmentIdx === idx) state.selectedSegmentIdx = null;
         else if (state.selectedSegmentIdx > idx) state.selectedSegmentIdx -= 1;
         segmentsBuiltSig = null;
         render();
+        pushHistory();
     });
     head.appendChild(delBtn);
 
@@ -928,6 +1027,7 @@ function buildSegmentRow(el, idx) {
     insBtn.title = 'Insert segment after this one';
     insBtn.textContent = '+';
     insBtn.addEventListener('click', () => {
+        flushDebounce();
         const calc = pathPoints(el.attrs.segments);
         const cur = calc[idx].end;
         const newSeg = { cmd: 'l', params: defaultSegmentParams('l', cur) };
@@ -935,6 +1035,7 @@ function buildSegmentRow(el, idx) {
         state.selectedSegmentIdx = idx + 1;
         segmentsBuiltSig = null;
         render();
+        pushHistory();
     });
     head.appendChild(insBtn);
 
@@ -968,6 +1069,7 @@ function buildSegmentRow(el, idx) {
 document.getElementById('path-add-segment').addEventListener('click', () => {
     const el = findElement(state.selectedId);
     if (!el || el.type !== 'path') return;
+    flushDebounce();
     const segs = el.attrs.segments;
     if (segs.length === 0) {
         segs.push({ cmd: 'M', params: [400, 300] });
@@ -979,6 +1081,7 @@ document.getElementById('path-add-segment').addEventListener('click', () => {
     state.selectedSegmentIdx = segs.length - 1;
     segmentsBuiltSig = null;
     render();
+    pushHistory();
 });
 
 function wireInspector() {
@@ -989,14 +1092,29 @@ function wireInspector() {
         else el.attrs[key] = val;
         render();
     };
-    document.getElementById('i-fill').addEventListener('input', (e) => setAttr('fill', e.target.value));
-    document.getElementById('i-fill-none').addEventListener('click', () => setAttr('fill', 'none'));
+    document.getElementById('i-fill').addEventListener('input', (e) => {
+        setAttr('fill', e.target.value);
+        pushHistoryDebounced();
+    });
+    document.getElementById('i-fill-none').addEventListener('click', () => {
+        flushDebounce();
+        setAttr('fill', 'none');
+        pushHistory();
+    });
     document.getElementById('i-fill-opacity').addEventListener('input', (e) => {
         document.getElementById('i-fill-opacity-val').textContent = (+e.target.value).toFixed(2);
         setAttr('fill-opacity', +e.target.value);
+        pushHistoryDebounced();
     });
-    document.getElementById('i-stroke').addEventListener('input', (e) => setAttr('stroke', e.target.value));
-    document.getElementById('i-stroke-none').addEventListener('click', () => setAttr('stroke', 'none'));
+    document.getElementById('i-stroke').addEventListener('input', (e) => {
+        setAttr('stroke', e.target.value);
+        pushHistoryDebounced();
+    });
+    document.getElementById('i-stroke-none').addEventListener('click', () => {
+        flushDebounce();
+        setAttr('stroke', 'none');
+        pushHistory();
+    });
     attachNumeric(document.getElementById('i-stroke-width'), {
         getPrecision: () => state.precision,
         getStep: () => precisionStep(state.precision),
@@ -1005,15 +1123,21 @@ function wireInspector() {
     document.getElementById('i-stroke-dash').addEventListener('input', (e) => {
         const v = e.target.value.trim();
         setAttr('stroke-dasharray', v || '');
+        pushHistoryDebounced();
     });
-    document.getElementById('i-text-content').addEventListener('input', (e) => setAttr('content', e.target.value));
-    // Font size: arrows snap to integer, typed values may be decimal.
+    document.getElementById('i-text-content').addEventListener('input', (e) => {
+        setAttr('content', e.target.value);
+        pushHistoryDebounced();
+    });
     attachNumeric(document.getElementById('i-text-size'), {
         getPrecision: () => 0,
         getStep: () => 1,
         onChange: (v) => setAttr('font-size', v),
     });
-    document.getElementById('i-text-family').addEventListener('input', (e) => setAttr('font-family', e.target.value));
+    document.getElementById('i-text-family').addEventListener('input', (e) => {
+        setAttr('font-family', e.target.value);
+        pushHistoryDebounced();
+    });
 }
 
 // ===== Source text =====
@@ -1120,6 +1244,7 @@ function applySource() {
         showSourceStatus(v.error, true);
         return;
     }
+    flushDebounce();
     const svg = v.svg;
     const vb = svg.getAttribute('viewBox');
     if (vb) canvas.setAttribute('viewBox', vb);
@@ -1158,6 +1283,7 @@ function applySource() {
     showSourceStatus('Applied', false);
     render();
     if (state.grid.enabled) renderHtmlRulers();
+    pushHistory();
 }
 
 let lastFilename = 'drawing.svg';
@@ -1292,12 +1418,14 @@ function addElement(type, p) {
 let drag = null;
 
 canvas.addEventListener('pointerdown', (e) => {
+    flushDebounce();
     const p = svgPoint(e.clientX, e.clientY);
 
     if (state.tool !== 'select') {
         addElement(state.tool, p);
         setTool('select');
         render();
+        pushHistory();
         return;
     }
 
@@ -1403,12 +1531,23 @@ canvas.addEventListener('pointerup', (e) => {
     if (drag) {
         try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
         drag = null;
+        pushHistory();
     }
 });
 
 // ===== Keyboard =====
 document.addEventListener('keydown', (e) => {
     if (e.target.matches('input, textarea')) return;
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        undo();
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) || e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redo();
+        return;
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
         deleteSelected();
         e.preventDefault();
@@ -1420,25 +1559,30 @@ document.addEventListener('keydown', (e) => {
 
 function deleteSelected() {
     if (!state.selectedId) return;
+    flushDebounce();
     const idx = state.elements.findIndex(el => el.id === state.selectedId);
     if (idx >= 0) state.elements.splice(idx, 1);
     state.selectedId = null;
     render();
+    pushHistory();
 }
 
 document.getElementById('btn-delete').addEventListener('click', deleteSelected);
 document.getElementById('btn-clear').addEventListener('click', () => {
     if (state.elements.length === 0) return;
     if (!confirm('Remove all elements?')) return;
+    flushDebounce();
     state.elements = [];
     state.selectedId = null;
     render();
+    pushHistory();
 });
 
 function duplicateSelected() {
     if (!state.selectedId) return;
     const el = findElement(state.selectedId);
     if (!el) return;
+    flushDebounce();
     const newAttrs = cloneAttrs(el.attrs);
     const def = TYPES[el.type];
     if (def.translate) def.translate(newAttrs, 10, 10);
@@ -1447,6 +1591,7 @@ function duplicateSelected() {
     state.selectedId = newEl.id;
     state.selectedSegmentIdx = null;
     render();
+    pushHistory();
 }
 
 function snapSelectedToPrecision() {
@@ -1454,6 +1599,7 @@ function snapSelectedToPrecision() {
     if (state.precision === 'free') return;
     const el = findElement(state.selectedId);
     if (!el) return;
+    flushDebounce();
     const prec = state.precision;
     const def = TYPES[el.type];
     for (const f of (def.geomFields || [])) {
@@ -1475,10 +1621,13 @@ function snapSelectedToPrecision() {
         }
     }
     render();
+    pushHistory();
 }
 
 document.getElementById('btn-duplicate').addEventListener('click', duplicateSelected);
 document.getElementById('btn-snap-precision').addEventListener('click', snapSelectedToPrecision);
+document.getElementById('btn-undo').addEventListener('click', undo);
+document.getElementById('btn-redo').addEventListener('click', redo);
 applyBtn.addEventListener('click', applySource);
 sourceEl.addEventListener('input', () => {
     applyBtn.disabled = sourceEl.value === canonicalSource;
@@ -1545,5 +1694,8 @@ state.precision = (precVal === 'free') ? 'free' : parseInt(precVal, 10);
 render();
 // Rulers depend on the canvas's measured size after layout, so wait one frame.
 if (state.grid.enabled) requestAnimationFrame(renderHtmlRulers);
+// Seed the undo history with the initial state.
+pushHistory();
+updateUndoButtons();
 
 })();
