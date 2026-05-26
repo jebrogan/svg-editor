@@ -163,6 +163,42 @@ const TYPES = {
         },
     },
 
+    polyline: {
+        defaults: () => ({ fill: 'none', stroke: '#000000', 'stroke-width': 2, 'fill-opacity': 1, points: [] }),
+        atPoint: (p) => ({ points: [[p.x, p.y], [p.x + 60, p.y + 40], [p.x + 120, p.y]] }),
+        geomFields: [],
+        bbox: null, // use DOM getBBox
+        handles: () => [],
+        applyHandle: () => {},
+        translate: (a, dx, dy) => {
+            for (const pt of (a.points || [])) { pt[0] += dx; pt[1] += dy; }
+        },
+        scaleAround: (a, anchor, sx, sy) => {
+            for (const pt of (a.points || [])) {
+                pt[0] = anchor.x + (pt[0] - anchor.x) * sx;
+                pt[1] = anchor.y + (pt[1] - anchor.y) * sy;
+            }
+        },
+    },
+
+    polygon: {
+        defaults: () => ({ fill: '#4f9dff', stroke: '#000000', 'stroke-width': 1, 'fill-opacity': 1, points: [] }),
+        atPoint: (p) => ({ points: [[p.x, p.y - 50], [p.x + 50, p.y + 30], [p.x - 50, p.y + 30]] }),
+        geomFields: [],
+        bbox: null,
+        handles: () => [],
+        applyHandle: () => {},
+        translate: (a, dx, dy) => {
+            for (const pt of (a.points || [])) { pt[0] += dx; pt[1] += dy; }
+        },
+        scaleAround: (a, anchor, sx, sy) => {
+            for (const pt of (a.points || [])) {
+                pt[0] = anchor.x + (pt[0] - anchor.x) * sx;
+                pt[1] = anchor.y + (pt[1] - anchor.y) * sy;
+            }
+        },
+    },
+
     path: {
         defaults: () => ({
             fill: 'none',
@@ -292,6 +328,29 @@ function parsePathData(d) {
         }
     }
     return segs;
+}
+
+// ===== polyline / polygon point helpers =====
+const POINTS_TOKEN_RE = /-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
+
+function parsePoints(str) {
+    if (!str || !str.trim()) return [];
+    const tokens = str.match(POINTS_TOKEN_RE) || [];
+    if (tokens.length % 2 !== 0) throw new Error('odd number of coordinates');
+    const pts = [];
+    for (let i = 0; i < tokens.length; i += 2) {
+        const x = parseFloat(tokens[i]);
+        const y = parseFloat(tokens[i + 1]);
+        if (Number.isNaN(x) || Number.isNaN(y)) throw new Error('non-numeric coordinate');
+        pts.push([x, y]);
+    }
+    return pts;
+}
+
+function serializePoints(points) {
+    return (points || [])
+        .map(pt => formatPathNum(pt[0]) + ',' + formatPathNum(pt[1]))
+        .join(' ');
 }
 
 function serializePathData(segs) {
@@ -523,6 +582,7 @@ function restoreSnapshot(snap) {
         }
     }
     segmentsBuiltSig = null;
+    polyPointsBuiltSig = null;
     inspectorBuiltForId = null;
     render();
 }
@@ -666,6 +726,13 @@ function applyAttrs(node, el) {
     }
     if (el.type === 'path') {
         node.setAttribute('d', serializePathData(a.segments));
+        for (const k of ['fill','stroke','stroke-width','fill-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
+            if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
+        }
+        return;
+    }
+    if (el.type === 'polyline' || el.type === 'polygon') {
+        node.setAttribute('points', serializePoints(a.points));
         for (const k of ['fill','stroke','stroke-width','fill-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
         }
@@ -834,6 +901,10 @@ function renderHandles() {
         renderPathHandles(el);
         return;
     }
+    if (el.type === 'polyline' || el.type === 'polygon') {
+        renderPolyHandles(el);
+        return;
+    }
 
     // Per-type specialty handles (line endpoints, text pos).
     // Rect/ellipse/circle no longer need their own handles — bbox handles cover them.
@@ -849,6 +920,23 @@ function renderHandles() {
         sq.setAttribute('height', HANDLE_SIZE);
         sq.setAttribute('data-handle', h.name);
         handlesLayer.appendChild(sq);
+    }
+}
+
+function renderPolyHandles(el) {
+    const pts = el.attrs.points || [];
+    const DOT = 6;
+    for (let i = 0; i < pts.length; i++) {
+        const [x, y] = pts[i];
+        const dot = document.createElementNS(SVG_NS, 'circle');
+        const isSel = (i === state.selectedSegmentIdx);
+        dot.setAttribute('class', 'path-segment-dot' + (isSel ? ' selected' : ''));
+        dot.setAttribute('cx', x);
+        dot.setAttribute('cy', y);
+        dot.setAttribute('r', DOT / 2);
+        dot.setAttribute('data-segment-idx', i);
+        dot.setAttribute('data-handle', 'poly-point');
+        handlesLayer.appendChild(dot);
     }
 }
 
@@ -1005,6 +1093,14 @@ function updateInspector() {
         renderSegmentList(el);
     } else {
         pathGroup.hidden = true;
+    }
+
+    const polyGroup = document.getElementById('poly-group');
+    if (el.type === 'polyline' || el.type === 'polygon') {
+        polyGroup.hidden = false;
+        renderPolyPointList(el);
+    } else {
+        polyGroup.hidden = true;
     }
 }
 
@@ -1167,6 +1263,148 @@ function buildSegmentRow(el, idx) {
     return row;
 }
 
+// ===== Polyline / polygon point editor =====
+let polyPointsBuiltSig = null;
+
+function polySig(el) {
+    return el.id + '|' + (el.attrs.points || []).length;
+}
+
+function renderPolyPointList(el) {
+    const sig = polySig(el);
+    const container = document.getElementById('poly-points');
+    if (polyPointsBuiltSig !== sig) {
+        buildPolyPointList(el);
+        polyPointsBuiltSig = sig;
+    }
+    const pts = el.attrs.points || [];
+    for (const row of container.querySelectorAll('.point-row')) {
+        const i = parseInt(row.dataset.pointIdx, 10);
+        row.classList.toggle('selected', i === state.selectedSegmentIdx);
+        const pt = pts[i];
+        if (!pt) continue;
+        for (const inp of row.querySelectorAll('input[data-coord]')) {
+            const axis = inp.dataset.coord;
+            const v = axis === 'x' ? pt[0] : pt[1];
+            if (document.activeElement !== inp) inp.value = String(v);
+        }
+    }
+}
+
+function buildPolyPointList(el) {
+    const container = document.getElementById('poly-points');
+    container.innerHTML = '';
+    const pts = el.attrs.points || [];
+    for (let i = 0; i < pts.length; i++) {
+        container.appendChild(buildPolyPointRow(el, i));
+    }
+}
+
+function buildPolyPointRow(el, idx) {
+    const row = document.createElement('div');
+    row.className = 'point-row';
+    if (idx === state.selectedSegmentIdx) row.classList.add('selected');
+    row.dataset.pointIdx = idx;
+
+    row.addEventListener('click', (ev) => {
+        if (ev.target.closest('button, input')) return;
+        state.selectedSegmentIdx = idx;
+        renderHandles();
+        renderPolyPointList(el);
+    });
+
+    const head = document.createElement('div');
+    head.className = 'point-head';
+
+    const idxLabel = document.createElement('span');
+    idxLabel.className = 'point-idx';
+    idxLabel.textContent = idx;
+    head.appendChild(idxLabel);
+
+    const makeInput = (axis) => {
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.dataset.coord = axis;
+        inp.value = String(el.attrs.points[idx][axis === 'x' ? 0 : 1]);
+        attachNumeric(inp, {
+            getPrecision: () => state.precision,
+            getStep: () => precisionStep(state.precision),
+            onChange: (v) => {
+                const cur = findElement(state.selectedId);
+                if (!cur || !cur.attrs.points || !cur.attrs.points[idx]) return;
+                cur.attrs.points[idx][axis === 'x' ? 0 : 1] = v;
+                render();
+            },
+        });
+        return inp;
+    };
+    head.appendChild(makeInput('x'));
+    head.appendChild(makeInput('y'));
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'seg-mini';
+    delBtn.title = 'Delete point';
+    delBtn.textContent = '×';
+    delBtn.addEventListener('click', () => {
+        flushDebounce();
+        el.attrs.points.splice(idx, 1);
+        if (state.selectedSegmentIdx === idx) state.selectedSegmentIdx = null;
+        else if (state.selectedSegmentIdx > idx) state.selectedSegmentIdx -= 1;
+        polyPointsBuiltSig = null;
+        render();
+        pushHistory();
+    });
+    head.appendChild(delBtn);
+
+    const insBtn = document.createElement('button');
+    insBtn.className = 'seg-mini';
+    insBtn.title = 'Insert point after this one';
+    insBtn.textContent = '+';
+    insBtn.addEventListener('click', () => {
+        flushDebounce();
+        const pts = el.attrs.points;
+        const cur = pts[idx];
+        let newPt;
+        if (idx + 1 < pts.length) {
+            const next = pts[idx + 1];
+            newPt = [(cur[0] + next[0]) / 2, (cur[1] + next[1]) / 2];
+        } else if (el.type === 'polygon' && pts.length > 0) {
+            const next = pts[0];
+            newPt = [(cur[0] + next[0]) / 2, (cur[1] + next[1]) / 2];
+        } else {
+            newPt = [cur[0] + 20, cur[1] + 20];
+        }
+        pts.splice(idx + 1, 0, newPt);
+        state.selectedSegmentIdx = idx + 1;
+        polyPointsBuiltSig = null;
+        render();
+        pushHistory();
+    });
+    head.appendChild(insBtn);
+
+    row.appendChild(head);
+    return row;
+}
+
+document.getElementById('poly-add-point').addEventListener('click', () => {
+    const el = findElement(state.selectedId);
+    if (!el || (el.type !== 'polyline' && el.type !== 'polygon')) return;
+    flushDebounce();
+    const pts = el.attrs.points;
+    let newPt;
+    if (pts.length === 0) {
+        newPt = [400, 300];
+    } else {
+        const last = pts[pts.length - 1];
+        newPt = [last[0] + 30, last[1] + 30];
+    }
+    pts.push(newPt);
+    state.selectedSegmentIdx = pts.length - 1;
+    polyPointsBuiltSig = null;
+    render();
+    pushHistory();
+});
+
 document.getElementById('path-add-segment').addEventListener('click', () => {
     const el = findElement(state.selectedId);
     if (!el || el.type !== 'path') return;
@@ -1265,6 +1503,13 @@ function serializeElement(el) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         return `<path ${parts.join(' ')} />`;
+    }
+    if (el.type === 'polyline' || el.type === 'polygon') {
+        parts.push(`points="${escapeAttr(serializePoints(a.points))}"`);
+        for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
+            if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
+        }
+        return `<${el.type} ${parts.join(' ')} />`;
     }
     for (const [k, v] of Object.entries(a)) {
         if (k === 'content') continue;
@@ -1368,6 +1613,14 @@ function applySource() {
                 return;
             }
             delete attrs.d;
+        }
+        if (type === 'polyline' || type === 'polygon') {
+            try {
+                attrs.points = parsePoints(child.getAttribute('points') || '');
+            } catch (e) {
+                showSourceStatus(`Invalid ${type} points: ${e.message}`, true);
+                return;
+            }
         }
         const defaults = TYPES[type].defaults();
         for (const k of Object.keys(defaults)) {
@@ -1554,6 +1807,24 @@ canvas.addEventListener('pointerdown', (e) => {
             return;
         }
 
+        // Polyline / polygon: point dot click selects; drag moves the vertex.
+        if (handleName === 'poly-point') {
+            const ptIdx = parseInt(handleEl.dataset.segmentIdx, 10);
+            if (state.selectedSegmentIdx !== ptIdx) {
+                state.selectedSegmentIdx = ptIdx;
+                render();
+            }
+            drag = {
+                kind: 'poly-handle',
+                ptIdx,
+                startPoint: p,
+                startAttrs: cloneAttrs(el.attrs),
+            };
+            canvas.setPointerCapture(e.pointerId);
+            e.preventDefault();
+            return;
+        }
+
         // Path: segment dot click selects the segment; cp/end drag edits the segment.
         if (el.type === 'path') {
             const segIdxStr = handleEl.dataset.segmentIdx;
@@ -1619,6 +1890,9 @@ function cloneAttrs(attrs) {
     if (Array.isArray(attrs.segments)) {
         out.segments = attrs.segments.map(s => ({ cmd: s.cmd, params: s.params.slice() }));
     }
+    if (Array.isArray(attrs.points)) {
+        out.points = attrs.points.map(pt => pt.slice());
+    }
     return out;
 }
 
@@ -1659,6 +1933,14 @@ canvas.addEventListener('pointermove', (e) => {
             ? p
             : { x: roundTo(p.x, state.precision), y: roundTo(p.y, state.precision) };
         applyPathHandle(el.attrs.segments, drag.segIdx, drag.handleName, snapped);
+    } else if (drag.kind === 'poly-handle') {
+        el.attrs = cloneAttrs(drag.startAttrs);
+        const snapped = state.precision === 'free'
+            ? p
+            : { x: roundTo(p.x, state.precision), y: roundTo(p.y, state.precision) };
+        if (el.attrs.points && el.attrs.points[drag.ptIdx]) {
+            el.attrs.points[drag.ptIdx] = [snapped.x, snapped.y];
+        }
     } else {
         el.attrs = { ...drag.startAttrs };
         def.applyHandle(el.attrs, drag.handleName, p);
@@ -1765,6 +2047,12 @@ function snapSelectedToPrecision() {
                     seg.params[i] = roundTo(seg.params[i], prec);
                 }
             }
+        }
+    }
+    if ((el.type === 'polyline' || el.type === 'polygon') && Array.isArray(el.attrs.points)) {
+        for (const pt of el.attrs.points) {
+            pt[0] = roundTo(pt[0], prec);
+            pt[1] = roundTo(pt[1], prec);
         }
     }
     render();

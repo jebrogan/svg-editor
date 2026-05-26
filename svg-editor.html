@@ -46,6 +46,8 @@
             <button class="tool-btn" data-tool="circle">Circle</button>
             <button class="tool-btn" data-tool="line">Line</button>
             <button class="tool-btn" data-tool="text">Text</button>
+            <button class="tool-btn" data-tool="polyline">Polyline</button>
+            <button class="tool-btn" data-tool="polygon">Polygon</button>
             <button class="tool-btn" data-tool="path">Path</button>
             <div class="section-label">Edit</div>
             <button class="tool-btn" id="btn-duplicate" title="Duplicate selected element offset by (+10, +10)">Duplicate</button>
@@ -121,6 +123,12 @@
                     <div class="section-label">Path segments</div>
                     <div id="path-segments"></div>
                     <button id="path-add-segment" class="mini">+ Add segment</button>
+                </div>
+
+                <div class="group" id="poly-group" hidden>
+                    <div class="section-label">Points</div>
+                    <div id="poly-points"></div>
+                    <button id="poly-add-point" class="mini">+ Add point</button>
                 </div>
 
                 <div class="group" id="text-group" hidden>

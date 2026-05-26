@@ -384,3 +384,36 @@ button.mini { padding: 2px 6px; font-size: 11px; }
     stroke-width: 1;
     cursor: move;
 }
+
+/* Polyline / polygon point editor */
+#poly-points {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.15);
+}
+.point-row {
+    border-top: 1px solid var(--border);
+    padding: 4px 2px;
+    cursor: pointer;
+}
+.point-row:first-child { border-top: none; }
+.point-row.selected { background: rgba(79, 157, 255, 0.15); }
+.point-row .point-head {
+    display: grid;
+    grid-template-columns: 22px 1fr 1fr 22px 22px;
+    gap: 4px;
+    align-items: center;
+}
+.point-row .point-idx {
+    color: var(--muted);
+    font-size: 11px;
+    text-align: right;
+}
+.point-row input[type="number"] {
+    padding: 1px 3px;
+    font-size: 11px;
+    width: 100%;
+}
