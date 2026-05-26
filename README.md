@@ -10,21 +10,27 @@ modern browser — no build step, no server, no dependencies.
 | `svg-editor.html` | Markup and layout (topbar, palette, canvas, inspector, source panel) |
 | `svg-editor.css`  | Styling |
 | `svg-editor.js`   | All editor logic — state, rendering, input handling, parsing |
+| `LICENSE`         | AGPL-3.0 license text |
+| `README.md`       | This file |
 
 ## Layout
 
 ```
-+-------------------------------------------------------------+
-| topbar:  Tool | Precision | Grid | Spacing |   Clear Delete |
-+---------+---------------------------------+-------------------+
-| palette | canvas (SVG)                    | inspector         |
-|  Tools  |                                 |  - geometry       |
-|  Add    |                                 |  - fill / stroke  |
-|  Edit   |                                 |  - text / path    |
-|         +---------------------------------+                   |
-|         | source: <svg>...</svg>          |                   |
-|         | [Open] [Save] [Apply]           |                   |
-+---------+---------------------------------+-------------------+
++----------------------------------------------------------------------+
+| topbar:  Tool | Precision | Grid + Spacing | Canvas (x y w h aspect  |
+|          Preset) | Undo Redo Clear Delete                            |
++----------+-------------------------------------+---------------------+
+| palette  | rulers + canvas (SVG)               | inspector           |
+|  Tools   |  +-----------+--------------------+ |  - id / type        |
+|  Add     |  | ruler-corn|  ruler-top         | |  - geometry         |
+|  Edit    |  +-----------+--------------------+ |  - fill / stroke    |
+|  Arrange |  | ruler-left|  canvas content    | |  - text / path /    |
+|          |  |           |                    | |    points / image   |
+|          |  +-----------+--------------------+ |                     |
+|          +-------------------------------------+                     |
+|          | source: <svg>...</svg>              |                     |
+|          | [Open] [Save] [Apply]               |                     |
++----------+-------------------------------------+---------------------+
 ```
 
 ## Element types
@@ -79,6 +85,16 @@ HTML rulers along the top and left edges of the canvas. The slider sets the
 spacing (5–100 units). Rulers use `getScreenCTM()` so ticks align with the
 actual viewBox coordinates even when the SVG is letterboxed.
 
+## Canvas size
+
+The topbar exposes the SVG viewBox: **x**, **y** (origin) and **w**, **h**
+(dimensions). The **aspect** toggle locks the W/H ratio at the moment it's
+activated — subsequent edits to W compute H (or vice versa) to preserve
+that ratio; toggling off discards it. The **Preset…** dropdown applies a
+common size (16² through 1920×1080, plus A4 portrait at 595×842).
+Existing elements are *not* rescaled when the canvas resizes — their
+coordinates stay put. Canvas changes go on the undo stack.
+
 ## Source panel
 
 The bottom textarea shows live SVG source generated from the canvas state.
@@ -92,10 +108,33 @@ Validation messages on Apply include line numbers where possible, e.g.
 
 ## Editing helpers
 
-- **Duplicate** — copies the selected element with a +10/+10 offset.
+Palette "Edit" section:
+
+- **Duplicate** — copies the selected element with a +10/+10 offset
+  (filename-href preserved for images; segment data deep-cloned for paths
+  and polylines/polygons).
 - **Snap to precision** — rounds the selected element's geometry,
-  stroke-width, font-size, and path-segment params to the active precision.
-- **Delete** key removes the current selection.
+  stroke-width, font-size, path-segment params, and polyline/polygon
+  vertex coordinates to the active precision.
+
+Palette "Arrange" section (z-order — `state.elements` order = paint order):
+
+- **To front** / **Forward** / **Backward** / **To back** move the
+  selected element through the stack. Keyboard: `Ctrl+]` forward,
+  `Ctrl+[` backward, `Ctrl+Shift+]` to front, `Ctrl+Shift+[` to back.
+
+Topbar:
+
+- **Undo** / **Redo** with keyboard `Ctrl+Z` (undo), `Ctrl+Shift+Z` or
+  `Ctrl+Y` (redo). Snapshots cover element edits and canvas viewBox
+  changes (selection is intentionally not snapshotted, so a pure
+  click-to-select doesn't pollute the history). Continuous edits — typed
+  values, color picker drags, opacity slider — coalesce via a 500 ms
+  debounce into one undo step. Drags push one snapshot at pointerup.
+
+Keys:
+
+- **Delete** / **Backspace** removes the current selection.
 - **Esc** exits add-mode or deselects.
 
 ## License
