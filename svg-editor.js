@@ -1598,6 +1598,7 @@ function applyCanvasViewBox() {
     const c = state.canvas;
     canvas.setAttribute('viewBox', `${c.x} ${c.y} ${c.width} ${c.height}`);
     syncCanvasInputs();
+    renderGrid();
     if (state.grid.enabled) renderHtmlRulers();
 }
 
