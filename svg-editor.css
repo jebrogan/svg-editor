@@ -77,6 +77,42 @@ html, body {
     width: 28px;
     text-align: right;
 }
+#topbar .canvas-control {
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+#topbar .canvas-control label {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 11px;
+}
+#topbar .canvas-control input[type="number"] {
+    width: 54px;
+    padding: 2px 4px;
+    font-size: 12px;
+}
+#topbar .canvas-control button {
+    padding: 2px 6px;
+    font-size: 11px;
+}
+#topbar .canvas-control button[aria-pressed="true"] {
+    background: var(--accent-2);
+    border-color: var(--accent);
+    color: var(--text);
+}
+#topbar .canvas-control select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font: inherit;
+    font-size: 12px;
+}
+#topbar { overflow-x: auto; }
 
 button:disabled {
     opacity: 0.45;

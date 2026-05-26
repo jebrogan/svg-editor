@@ -22,6 +22,9 @@ const state = {
     nextId: 1,
     precision: 1, // 0..4 (decimal places) or 'free'
     grid: { enabled: false, spacing: 20 },
+    canvas: { x: 0, y: 0, width: 800, height: 600 }, // SVG viewBox
+    canvasAspectLocked: false,
+    canvasLockedAspect: null,
     lastImagePrefix: 'image/', // sticky default for new <image> href prefixes
 };
 
@@ -548,7 +551,10 @@ const history = {
 };
 
 function takeSnapshot() {
-    return JSON.parse(JSON.stringify(state.elements));
+    return {
+        elements: JSON.parse(JSON.stringify(state.elements)),
+        canvas: { ...state.canvas },
+    };
 }
 
 function pushHistory() {
@@ -586,7 +592,13 @@ function flushDebounce() {
 }
 
 function restoreSnapshot(snap) {
-    state.elements = JSON.parse(JSON.stringify(snap));
+    // Compatibility: older snapshots were just an array of elements.
+    const elements = Array.isArray(snap) ? snap : (snap.elements || []);
+    state.elements = JSON.parse(JSON.stringify(elements));
+    if (!Array.isArray(snap) && snap.canvas) {
+        state.canvas = { ...snap.canvas };
+        applyCanvasViewBox();
+    }
     // Validate selection
     if (state.selectedId && !findElement(state.selectedId)) {
         state.selectedId = null;
@@ -1573,11 +1585,76 @@ function wireInspector() {
 
 // ===== Source text =====
 function serialize() {
-    const viewBox = canvas.getAttribute('viewBox');
+    const c = state.canvas;
+    const viewBox = `${formatPathNum(c.x)} ${formatPathNum(c.y)} ${formatPathNum(c.width)} ${formatPathNum(c.height)}`;
     const lines = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">`];
     for (const el of state.elements) lines.push('  ' + serializeElement(el));
     lines.push('</svg>');
     return lines.join('\n');
+}
+
+// ===== Canvas (viewBox) =====
+function applyCanvasViewBox() {
+    const c = state.canvas;
+    canvas.setAttribute('viewBox', `${c.x} ${c.y} ${c.width} ${c.height}`);
+    syncCanvasInputs();
+    if (state.grid.enabled) renderHtmlRulers();
+}
+
+function syncCanvasInputs() {
+    const c = state.canvas;
+    const setIf = (id, val) => {
+        const el = document.getElementById(id);
+        if (!el || document.activeElement === el) return;
+        el.value = formatPathNum(val);
+    };
+    setIf('canvas-x', c.x);
+    setIf('canvas-y', c.y);
+    setIf('canvas-w', c.width);
+    setIf('canvas-h', c.height);
+}
+
+function setCanvasDim(field, value) {
+    const c = state.canvas;
+    if (c[field] === value) return;
+    if (state.canvasAspectLocked && (field === 'width' || field === 'height')) {
+        const ratio = state.canvasLockedAspect || (c.width / c.height) || 1;
+        if (field === 'width') {
+            c.width = value;
+            c.height = value / ratio;
+        } else {
+            c.height = value;
+            c.width = value * ratio;
+        }
+    } else {
+        c[field] = value;
+    }
+    applyCanvasViewBox();
+}
+
+function toggleCanvasAspectLock() {
+    state.canvasAspectLocked = !state.canvasAspectLocked;
+    const btn = document.getElementById('canvas-aspect-lock');
+    if (state.canvasAspectLocked) {
+        const c = state.canvas;
+        state.canvasLockedAspect = (c.height !== 0) ? (c.width / c.height) : 1;
+        btn.setAttribute('aria-pressed', 'true');
+    } else {
+        state.canvasLockedAspect = null;
+        btn.setAttribute('aria-pressed', 'false');
+    }
+}
+
+function applyCanvasPreset(spec) {
+    if (!spec) return;
+    const [w, h] = spec.split(',').map(Number);
+    if (!isFinite(w) || !isFinite(h)) return;
+    flushDebounce();
+    state.canvas.width = w;
+    state.canvas.height = h;
+    if (state.canvasAspectLocked) state.canvasLockedAspect = (h !== 0) ? w / h : 1;
+    applyCanvasViewBox();
+    pushHistory();
 }
 
 function serializeElement(el) {
@@ -1692,7 +1769,13 @@ function applySource() {
     flushDebounce();
     const svg = v.svg;
     const vb = svg.getAttribute('viewBox');
-    if (vb) canvas.setAttribute('viewBox', vb);
+    if (vb) {
+        const parts = vb.split(/\s+/).map(parseFloat);
+        if (parts.length === 4 && parts.every(n => isFinite(n))) {
+            state.canvas = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+            applyCanvasViewBox();
+        }
+    }
 
     const newElements = [];
     let maxId = state.nextId;
@@ -2388,6 +2471,21 @@ const ro = new ResizeObserver(() => {
 });
 ro.observe(canvas);
 
+// Canvas viewBox inputs
+for (const [id, field] of [['canvas-x','x'], ['canvas-y','y'], ['canvas-w','width'], ['canvas-h','height']]) {
+    attachNumeric(document.getElementById(id), {
+        getPrecision: () => state.precision,
+        getStep: () => precisionStep(state.precision),
+        onChange: (v) => setCanvasDim(field, v),
+    });
+}
+document.getElementById('canvas-aspect-lock').addEventListener('click', toggleCanvasAspectLock);
+document.getElementById('canvas-preset').addEventListener('change', (e) => {
+    const spec = e.target.value;
+    e.target.value = '';
+    applyCanvasPreset(spec);
+});
+
 // ===== Init =====
 wireInspector();
 
@@ -2398,6 +2496,16 @@ gridSpacingVal.textContent = state.grid.spacing;
 applyGridVisibility();
 const precVal = document.getElementById('precision-select').value;
 state.precision = (precVal === 'free') ? 'free' : parseInt(precVal, 10);
+
+// Initialize canvas viewBox from the HTML attribute, then mirror to inputs.
+{
+    const vb = canvas.getAttribute('viewBox') || '0 0 800 600';
+    const parts = vb.split(/\s+/).map(parseFloat);
+    if (parts.length === 4 && parts.every(n => isFinite(n))) {
+        state.canvas = { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+    }
+    applyCanvasViewBox();
+}
 
 render();
 // Rulers depend on the canvas's measured size after layout, so wait one frame.

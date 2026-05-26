@@ -30,6 +30,27 @@
                 <input type="range" id="grid-spacing" min="5" max="100" step="1" value="20">
                 <span id="grid-spacing-val" class="num">20</span>
             </label>
+            <span class="canvas-control" title="Canvas viewBox">
+                <span>Canvas</span>
+                <label>x<input id="canvas-x" type="number"></label>
+                <label>y<input id="canvas-y" type="number"></label>
+                <label>w<input id="canvas-w" type="number"></label>
+                <label>h<input id="canvas-h" type="number"></label>
+                <button id="canvas-aspect-lock" type="button" title="Lock aspect ratio when changing W or H" aria-pressed="false">aspect</button>
+                <select id="canvas-preset" title="Apply a preset size">
+                    <option value="">Preset…</option>
+                    <option value="16,16">16 × 16</option>
+                    <option value="32,32">32 × 32</option>
+                    <option value="64,64">64 × 64</option>
+                    <option value="256,256">256 × 256</option>
+                    <option value="512,512">512 × 512</option>
+                    <option value="800,600">800 × 600</option>
+                    <option value="1024,768">1024 × 768</option>
+                    <option value="1280,720">1280 × 720</option>
+                    <option value="1920,1080">1920 × 1080</option>
+                    <option value="595,842">A4 (595 × 842)</option>
+                </select>
+            </span>
             <span class="spacer"></span>
             <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
             <button id="btn-redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
