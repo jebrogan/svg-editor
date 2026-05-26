@@ -760,7 +760,12 @@ function applyAttrs(node, el) {
         for (const k of ['x','y','width','height','preserveAspectRatio']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
         }
-        if (a.href) node.setAttribute('href', a.href);
+        // For rendering, prefer the in-session display URL (a blob: URL
+        // attached when the user picked a local file) over the canonical
+        // href so the image shows up even though the canonical href is a
+        // bare filename relative to the eventual SVG location.
+        const renderHref = a._displayHref || a.href;
+        if (renderHref) node.setAttribute('href', renderHref);
         return;
     }
     for (const [k, v] of Object.entries(a)) {
@@ -2222,22 +2227,31 @@ async function pickImageFile() {
     });
 }
 
+function revokeDisplayHref(attrs) {
+    if (attrs && typeof attrs._displayHref === 'string' && attrs._displayHref.startsWith('blob:')) {
+        try { URL.revokeObjectURL(attrs._displayHref); } catch (_) {}
+    }
+}
+
 async function startImagePlacement(point) {
     const file = await pickImageFile();
     if (!file) return;
-    let dataUri;
-    try { dataUri = await fileToDataURI(file); }
-    catch (e) { showSourceStatus(`Read failed: ${e.message}`, true); return; }
+    const displayUrl = URL.createObjectURL(file);
     let dims;
-    try { dims = await probeImageDimensions(dataUri); }
-    catch (e) { showSourceStatus(`${e.message}`, true); return; }
+    try { dims = await probeImageDimensions(displayUrl); }
+    catch (e) {
+        URL.revokeObjectURL(displayUrl);
+        showSourceStatus(`${e.message}`, true);
+        return;
+    }
     flushDebounce();
     const attrs = {
         x: point.x,
         y: point.y,
         width: dims.width,
         height: dims.height,
-        href: dataUri,
+        href: file.name,         // canonical: bare filename for serialization
+        _displayHref: displayUrl, // session-only: blob URL for editor rendering
         preserveAspectRatio: 'xMidYMid meet',
     };
     const el = { id: nextId('image'), type: 'image', attrs };
@@ -2253,11 +2267,10 @@ async function replaceSelectedImageFromFile() {
     if (!el || el.type !== 'image') return;
     const file = await pickImageFile();
     if (!file) return;
-    let dataUri;
-    try { dataUri = await fileToDataURI(file); }
-    catch (e) { showSourceStatus(`Read failed: ${e.message}`, true); return; }
     flushDebounce();
-    el.attrs.href = dataUri;
+    revokeDisplayHref(el.attrs);
+    el.attrs._displayHref = URL.createObjectURL(file);
+    el.attrs.href = file.name;
     render();
     pushHistory();
 }
@@ -2266,9 +2279,11 @@ function setSelectedImageHrefFromUrl() {
     const el = findElement(state.selectedId);
     if (!el || el.type !== 'image') return;
     const cur = el.attrs.href && !el.attrs.href.startsWith('data:') ? el.attrs.href : '';
-    const url = prompt('Image URL:', cur);
+    const url = prompt('Image URL (use a data: URI to embed inline):', cur);
     if (url === null) return;
     flushDebounce();
+    revokeDisplayHref(el.attrs);
+    delete el.attrs._displayHref;
     el.attrs.href = url.trim();
     render();
     pushHistory();
