@@ -1688,6 +1688,13 @@ document.addEventListener('keydown', (e) => {
         redo();
         return;
     }
+    if ((e.ctrlKey || e.metaKey) && (e.key === ']' || e.key === '[')) {
+        e.preventDefault();
+        const isForward = (e.key === ']');
+        if (e.shiftKey) zMoveSelected(isForward ? 'front' : 'back');
+        else            zMoveSelected(isForward ? 'forward' : 'backward');
+        return;
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
         deleteSelected();
         e.preventDefault();
@@ -1768,6 +1775,29 @@ document.getElementById('btn-duplicate').addEventListener('click', duplicateSele
 document.getElementById('btn-snap-precision').addEventListener('click', snapSelectedToPrecision);
 document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);
+
+function zMoveSelected(direction) {
+    if (!state.selectedId) return;
+    const idx = state.elements.findIndex(el => el.id === state.selectedId);
+    if (idx < 0) return;
+    let newIdx;
+    if (direction === 'front')         newIdx = state.elements.length - 1;
+    else if (direction === 'back')     newIdx = 0;
+    else if (direction === 'forward')  newIdx = Math.min(idx + 1, state.elements.length - 1);
+    else if (direction === 'backward') newIdx = Math.max(idx - 1, 0);
+    else return;
+    if (newIdx === idx) return;
+    flushDebounce();
+    const [el] = state.elements.splice(idx, 1);
+    state.elements.splice(newIdx, 0, el);
+    render();
+    pushHistory();
+}
+
+document.getElementById('btn-z-front').addEventListener('click',    () => zMoveSelected('front'));
+document.getElementById('btn-z-forward').addEventListener('click',  () => zMoveSelected('forward'));
+document.getElementById('btn-z-backward').addEventListener('click', () => zMoveSelected('backward'));
+document.getElementById('btn-z-back').addEventListener('click',     () => zMoveSelected('back'));
 applyBtn.addEventListener('click', applySource);
 sourceEl.addEventListener('input', () => {
     applyBtn.disabled = sourceEl.value === canonicalSource;
