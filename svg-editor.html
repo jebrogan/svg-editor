@@ -142,6 +142,28 @@
                         <button id="btn-image-file" class="mini">From file…</button>
                         <button id="btn-image-url" class="mini">From URL…</button>
                     </div>
+                    <div class="row">
+                        <label>Align</label>
+                        <select id="i-image-align" title="preserveAspectRatio alignment">
+                            <option value="none">none (stretch)</option>
+                            <option value="xMinYMin">xMinYMin</option>
+                            <option value="xMidYMin">xMidYMin</option>
+                            <option value="xMaxYMin">xMaxYMin</option>
+                            <option value="xMinYMid">xMinYMid</option>
+                            <option value="xMidYMid">xMidYMid</option>
+                            <option value="xMaxYMid">xMaxYMid</option>
+                            <option value="xMinYMax">xMinYMax</option>
+                            <option value="xMidYMax">xMidYMax</option>
+                            <option value="xMaxYMax">xMaxYMax</option>
+                        </select>
+                    </div>
+                    <div class="row">
+                        <label>Mode</label>
+                        <select id="i-image-mode" title="meet = fit inside (letterbox); slice = cover (crop)">
+                            <option value="meet">meet</option>
+                            <option value="slice">slice</option>
+                        </select>
+                    </div>
                 </div>
 
                 <input type="file" id="image-file-input" accept="image/*" hidden>

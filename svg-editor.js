@@ -1132,9 +1132,23 @@ function updateInspector() {
     if (el.type === 'image') {
         imageGroup.hidden = false;
         updateImageHrefDisplay(el.attrs.href || '');
+        const par = parsePreserveAspectRatio(el.attrs.preserveAspectRatio);
+        const alignSel = document.getElementById('i-image-align');
+        const modeSel = document.getElementById('i-image-mode');
+        if (document.activeElement !== alignSel) alignSel.value = par.align;
+        if (document.activeElement !== modeSel) modeSel.value = par.mode;
+        modeSel.disabled = (par.align === 'none');
     } else {
         imageGroup.hidden = true;
     }
+}
+
+function parsePreserveAspectRatio(value) {
+    if (!value) return { align: 'xMidYMid', mode: 'meet' };
+    const parts = value.trim().split(/\s+/);
+    const align = parts[0] || 'xMidYMid';
+    const mode = (align === 'none') ? 'meet' : (parts[1] || 'meet');
+    return { align, mode };
 }
 
 function updateImageHrefDisplay(href) {
@@ -2262,6 +2276,20 @@ function setSelectedImageHrefFromUrl() {
 
 document.getElementById('btn-image-file').addEventListener('click', replaceSelectedImageFromFile);
 document.getElementById('btn-image-url').addEventListener('click', setSelectedImageHrefFromUrl);
+
+function applyImagePreserveAspectRatio() {
+    const el = findElement(state.selectedId);
+    if (!el || el.type !== 'image') return;
+    const align = document.getElementById('i-image-align').value;
+    const mode = document.getElementById('i-image-mode').value;
+    flushDebounce();
+    el.attrs.preserveAspectRatio = (align === 'none') ? 'none' : `${align} ${mode}`;
+    document.getElementById('i-image-mode').disabled = (align === 'none');
+    render();
+    pushHistory();
+}
+document.getElementById('i-image-align').addEventListener('change', applyImagePreserveAspectRatio);
+document.getElementById('i-image-mode').addEventListener('change', applyImagePreserveAspectRatio);
 
 document.getElementById('btn-save-source').addEventListener('click', saveSourceToFile);
 const fileInput = document.getElementById('file-input');

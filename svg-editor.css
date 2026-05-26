@@ -425,6 +425,18 @@ button.mini { padding: 2px 6px; font-size: 11px; }
     white-space: nowrap;
     min-width: 0;
 }
+
+#i-image-align,
+#i-image-mode {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font: inherit;
+    font-size: 12px;
+    width: 100%;
+}
 .image-buttons {
     grid-template-columns: 1fr 1fr;
     gap: 6px;
