@@ -163,6 +163,24 @@ const TYPES = {
         },
     },
 
+    image: {
+        defaults: () => ({ x: 0, y: 0, width: 100, height: 100, href: '', preserveAspectRatio: 'xMidYMid meet' }),
+        atPoint: (p) => ({ x: p.x, y: p.y }),
+        geomFields: ['x', 'y', 'width', 'height'],
+        bbox: (a) => ({ x: a.x, y: a.y, width: a.width, height: a.height }),
+        handles: () => [],
+        applyHandle: () => {},
+        translate: (a, dx, dy) => { a.x += dx; a.y += dy; },
+        scaleAround: (a, anchor, sx, sy) => {
+            a.x = anchor.x + (a.x - anchor.x) * sx;
+            a.y = anchor.y + (a.y - anchor.y) * sy;
+            a.width *= sx;
+            a.height *= sy;
+            if (a.width < 0)  { a.x += a.width;  a.width  = -a.width;  }
+            if (a.height < 0) { a.y += a.height; a.height = -a.height; }
+        },
+    },
+
     polyline: {
         defaults: () => ({ fill: 'none', stroke: '#000000', 'stroke-width': 2, 'fill-opacity': 1, points: [] }),
         atPoint: (p) => ({ points: [[p.x, p.y], [p.x + 60, p.y + 40], [p.x + 120, p.y]] }),
@@ -738,6 +756,13 @@ function applyAttrs(node, el) {
         }
         return;
     }
+    if (el.type === 'image') {
+        for (const k of ['x','y','width','height','preserveAspectRatio']) {
+            if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
+        }
+        if (a.href) node.setAttribute('href', a.href);
+        return;
+    }
     for (const [k, v] of Object.entries(a)) {
         if (k === 'content') continue;
         if (v === undefined || v === null || v === '') continue;
@@ -1102,6 +1127,34 @@ function updateInspector() {
     } else {
         polyGroup.hidden = true;
     }
+
+    const imageGroup = document.getElementById('image-group');
+    if (el.type === 'image') {
+        imageGroup.hidden = false;
+        updateImageHrefDisplay(el.attrs.href || '');
+    } else {
+        imageGroup.hidden = true;
+    }
+}
+
+function updateImageHrefDisplay(href) {
+    const span = document.getElementById('i-image-href-display');
+    let display, full = href;
+    if (!href) {
+        display = '(none)';
+    } else if (href.startsWith('data:')) {
+        const base64 = href.split(',')[1] || '';
+        const bytes = Math.floor(base64.length * 3 / 4);
+        const mime = (href.match(/^data:([^;,]+)/) || [])[1] || 'data';
+        display = `[embedded ${mime}, ~${bytes.toLocaleString()} bytes]`;
+        full = display;
+    } else if (href.length > 60) {
+        display = href.slice(0, 36) + '…' + href.slice(-20);
+    } else {
+        display = href;
+    }
+    span.textContent = display;
+    span.title = full;
 }
 
 // ===== Path segment editor =====
@@ -1511,6 +1564,13 @@ function serializeElement(el) {
         }
         return `<${el.type} ${parts.join(' ')} />`;
     }
+    if (el.type === 'image') {
+        for (const k of ['x','y','width','height','preserveAspectRatio']) {
+            if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
+        }
+        if (a.href) parts.push(`href="${escapeAttr(a.href)}"`);
+        return `<image ${parts.join(' ')} />`;
+    }
     for (const [k, v] of Object.entries(a)) {
         if (k === 'content') continue;
         if (v === undefined || v === null || v === '') continue;
@@ -1621,6 +1681,11 @@ function applySource() {
                 showSourceStatus(`Invalid ${type} points: ${e.message}`, true);
                 return;
             }
+        }
+        if (type === 'image') {
+            // Legacy: xlink:href → href
+            if (!attrs.href && attrs['xlink:href']) attrs.href = attrs['xlink:href'];
+            delete attrs['xlink:href'];
         }
         const defaults = TYPES[type].defaults();
         for (const k of Object.keys(defaults)) {
@@ -1776,6 +1841,12 @@ canvas.addEventListener('pointerdown', (e) => {
     const p = svgPoint(e.clientX, e.clientY);
 
     if (state.tool !== 'select') {
+        if (state.tool === 'image') {
+            const dropPoint = p;
+            setTool('select');
+            startImagePlacement(dropPoint);
+            return;
+        }
         addElement(state.tool, p);
         setTool('select');
         render();
@@ -2090,6 +2161,108 @@ applyBtn.addEventListener('click', applySource);
 sourceEl.addEventListener('input', () => {
     applyBtn.disabled = sourceEl.value === canonicalSource;
 });
+// ===== Image element file/URL handling =====
+const imageFileInput = document.getElementById('image-file-input');
+
+function fileToDataURI(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error('read failed'));
+        reader.readAsDataURL(file);
+    });
+}
+
+function probeImageDimensions(uri) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth || 100, height: img.naturalHeight || 100 });
+        img.onerror = () => reject(new Error('could not decode image'));
+        img.src = uri;
+    });
+}
+
+async function pickImageFile() {
+    if (window.showOpenFilePicker) {
+        try {
+            const [handle] = await window.showOpenFilePicker({
+                types: [{ description: 'Image', accept: { 'image/*': ['.png','.jpg','.jpeg','.gif','.webp','.svg','.bmp'] } }],
+                multiple: false,
+            });
+            return await handle.getFile();
+        } catch (err) {
+            if (err.name === 'AbortError') return null;
+            showSourceStatus(`Open failed: ${err.message || err.name}`, true);
+            return null;
+        }
+    }
+    return new Promise(resolve => {
+        const handler = () => {
+            imageFileInput.removeEventListener('change', handler);
+            const f = imageFileInput.files && imageFileInput.files[0];
+            imageFileInput.value = '';
+            resolve(f || null);
+        };
+        imageFileInput.addEventListener('change', handler);
+        imageFileInput.click();
+    });
+}
+
+async function startImagePlacement(point) {
+    const file = await pickImageFile();
+    if (!file) return;
+    let dataUri;
+    try { dataUri = await fileToDataURI(file); }
+    catch (e) { showSourceStatus(`Read failed: ${e.message}`, true); return; }
+    let dims;
+    try { dims = await probeImageDimensions(dataUri); }
+    catch (e) { showSourceStatus(`${e.message}`, true); return; }
+    flushDebounce();
+    const attrs = {
+        x: point.x,
+        y: point.y,
+        width: dims.width,
+        height: dims.height,
+        href: dataUri,
+        preserveAspectRatio: 'xMidYMid meet',
+    };
+    const el = { id: nextId('image'), type: 'image', attrs };
+    state.elements.push(el);
+    state.selectedId = el.id;
+    state.selectedSegmentIdx = null;
+    render();
+    pushHistory();
+}
+
+async function replaceSelectedImageFromFile() {
+    const el = findElement(state.selectedId);
+    if (!el || el.type !== 'image') return;
+    const file = await pickImageFile();
+    if (!file) return;
+    let dataUri;
+    try { dataUri = await fileToDataURI(file); }
+    catch (e) { showSourceStatus(`Read failed: ${e.message}`, true); return; }
+    flushDebounce();
+    el.attrs.href = dataUri;
+    render();
+    pushHistory();
+}
+
+function setSelectedImageHrefFromUrl() {
+    const el = findElement(state.selectedId);
+    if (!el || el.type !== 'image') return;
+    const cur = el.attrs.href && !el.attrs.href.startsWith('data:') ? el.attrs.href : '';
+    const url = prompt('Image URL:', cur);
+    if (url === null) return;
+    flushDebounce();
+    el.attrs.href = url.trim();
+    render();
+    pushHistory();
+}
+
+document.getElementById('btn-image-file').addEventListener('click', replaceSelectedImageFromFile);
+document.getElementById('btn-image-url').addEventListener('click', setSelectedImageHrefFromUrl);
+
 document.getElementById('btn-save-source').addEventListener('click', saveSourceToFile);
 const fileInput = document.getElementById('file-input');
 document.getElementById('btn-open-source').addEventListener('click', openSourceFromFile);

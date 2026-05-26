@@ -417,3 +417,15 @@ button.mini { padding: 2px 6px; font-size: 11px; }
     font-size: 11px;
     width: 100%;
 }
+
+#i-image-href-display {
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+.image-buttons {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
