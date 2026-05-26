@@ -1,0 +1,386 @@
+:root {
+    --bg: #1f2126;
+    --panel: #2a2d33;
+    --panel-2: #33373f;
+    --border: #3c4049;
+    --text: #e6e6e6;
+    --muted: #8a8f99;
+    --accent: #4f9dff;
+    --accent-2: #2c6fc9;
+    --danger: #d65a5a;
+    --handle: #ffffff;
+    --handle-stroke: #2b6cff;
+    --selection: #2b6cff;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+}
+
+#app {
+    display: grid;
+    height: 100vh;
+    grid-template-columns: 180px 1fr 280px;
+    grid-template-rows: 40px 1fr 200px;
+    grid-template-areas:
+        "top      top      top"
+        "palette  canvas   inspector"
+        "palette  source   inspector";
+    gap: 1px;
+    background: var(--border);
+}
+
+#topbar {
+    grid-area: top;
+    background: var(--panel);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 12px;
+}
+#topbar .title { font-weight: 600; }
+#topbar .tool-status { color: var(--muted); }
+#topbar .tool-status b { color: var(--text); }
+#topbar .spacer { flex: 1; }
+#topbar .precision-control {
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+#topbar .precision-control select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 4px;
+    font: inherit;
+}
+#topbar .grid-control {
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+#topbar .grid-control input[type="range"] {
+    width: 100px;
+}
+#topbar .grid-control .num {
+    color: var(--text);
+    width: 28px;
+    text-align: right;
+}
+
+button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+button:disabled:hover { background: var(--panel-2); }
+
+#palette {
+    grid-area: palette;
+    background: var(--panel);
+    padding: 10px;
+    overflow-y: auto;
+}
+#palette .tool-btn {
+    display: block;
+    width: 100%;
+    margin: 2px 0;
+    text-align: left;
+}
+.tool-btn.active {
+    background: var(--accent-2);
+    border-color: var(--accent);
+}
+
+#canvas-wrap {
+    grid-area: canvas;
+    background: var(--panel-2);
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 0 1fr;
+    grid-template-rows: 0 1fr;
+    grid-template-areas:
+        "rc rt"
+        "rl ca";
+}
+#canvas-wrap.grid-on {
+    grid-template-columns: 24px 1fr;
+    grid-template-rows: 18px 1fr;
+}
+#canvas {
+    grid-area: ca;
+    background: #ffffff;
+    width: 100%;
+    height: 100%;
+    display: block;
+    min-width: 0;
+    min-height: 0;
+}
+#canvas.tool-add { cursor: crosshair; }
+
+.ruler { display: none; }
+#canvas-wrap.grid-on .ruler { display: block; }
+#ruler-corner {
+    grid-area: rc;
+    background: #ececec;
+    border-right: 1px solid #888;
+    border-bottom: 1px solid #888;
+}
+#ruler-top {
+    grid-area: rt;
+    background: #f5f5f5;
+    border-bottom: 1px solid #888;
+    position: relative;
+    overflow: hidden;
+}
+#ruler-left {
+    grid-area: rl;
+    background: #f5f5f5;
+    border-right: 1px solid #888;
+    position: relative;
+    overflow: hidden;
+}
+.ruler-tick {
+    position: absolute;
+    background: #777;
+    pointer-events: none;
+}
+#ruler-top .ruler-tick { top: 60%; bottom: 0; width: 1px; }
+#ruler-top .ruler-tick.major { top: 25%; background: #222; }
+#ruler-left .ruler-tick { left: 60%; right: 0; height: 1px; }
+#ruler-left .ruler-tick.major { left: 25%; background: #222; }
+.ruler-label {
+    position: absolute;
+    font: 9px sans-serif;
+    color: #333;
+    pointer-events: none;
+    user-select: none;
+    white-space: nowrap;
+}
+#ruler-top .ruler-label { top: 1px; }
+#ruler-left .ruler-label { left: 1px; }
+
+#inspector {
+    grid-area: inspector;
+    background: var(--panel);
+    padding: 10px;
+    overflow-y: auto;
+}
+
+#source-panel {
+    grid-area: source;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.source-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+.source-header #source-status {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#source {
+    flex: 1;
+    background: #16181c;
+    color: #d8e0ea;
+    border: none;
+    outline: none;
+    resize: none;
+    padding: 8px 10px;
+    font: 12px/1.45 "Menlo", "Consolas", monospace;
+    min-height: 0;
+}
+
+.section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 8px 0 4px;
+}
+.section-label:first-child { margin-top: 0; }
+
+.group {
+    border-top: 1px solid var(--border);
+    margin-top: 8px;
+    padding-top: 4px;
+}
+
+.row {
+    display: grid;
+    grid-template-columns: 70px 1fr auto;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+}
+.row label {
+    color: var(--muted);
+    font-size: 12px;
+}
+.row .num { color: var(--muted); width: 36px; text-align: right; }
+
+input, button, textarea {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font: inherit;
+}
+input[type="number"] { width: 100%; }
+input[type="text"] { width: 100%; }
+input[type="color"] {
+    width: 36px;
+    height: 24px;
+    padding: 0;
+}
+input[type="range"] { width: 100%; padding: 0; }
+input[readonly] { color: var(--muted); }
+
+button {
+    cursor: pointer;
+    background: var(--panel-2);
+}
+button:hover { background: #41464f; }
+button.mini { padding: 2px 6px; font-size: 11px; }
+
+.muted { color: var(--muted); }
+
+/* SVG handle styling */
+.handle {
+    fill: var(--handle);
+    stroke: var(--handle-stroke);
+    stroke-width: 1;
+    cursor: nwse-resize;
+}
+.handle.h-n, .handle.h-s { cursor: ns-resize; }
+.handle.h-e, .handle.h-w { cursor: ew-resize; }
+.handle.h-ne, .handle.h-sw { cursor: nesw-resize; }
+.handle.h-nw, .handle.h-se { cursor: nwse-resize; }
+.handle.h-endpoint { cursor: move; }
+.handle.h-center { cursor: move; fill: var(--handle-stroke); }
+
+.selection-outline {
+    fill: none;
+    stroke: var(--selection);
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+    pointer-events: none;
+    vector-effect: non-scaling-stroke;
+}
+
+[data-editor-element] { cursor: move; }
+
+/* SVG grid lines */
+.grid-line {
+    stroke: #aaaaaa;
+    stroke-dasharray: 2 2;
+    stroke-width: 0.5;
+    fill: none;
+    pointer-events: none;
+}
+
+/* Path segment editor */
+#path-segments {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.15);
+}
+.segment-row {
+    border-top: 1px solid var(--border);
+    padding: 4px 2px;
+    cursor: pointer;
+}
+.segment-row:first-child { border-top: none; }
+.segment-row.selected { background: rgba(79, 157, 255, 0.15); }
+.segment-row .seg-head {
+    display: grid;
+    grid-template-columns: 22px auto auto 22px 22px;
+    align-items: center;
+    gap: 4px;
+}
+.segment-row .seg-idx {
+    color: var(--muted);
+    font-size: 11px;
+    text-align: right;
+}
+.segment-row select.seg-cmd {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 2px;
+    font: inherit;
+    font-size: 11px;
+    width: 100%;
+}
+.segment-row button.seg-rel,
+.segment-row button.seg-mini {
+    padding: 1px 4px;
+    font-size: 11px;
+    min-width: 22px;
+}
+.segment-row button.seg-rel.is-abs { background: #36506e; }
+.segment-row .seg-params {
+    margin-top: 3px;
+    display: grid;
+    grid-template-columns: 18px 1fr 18px 1fr;
+    align-items: center;
+    gap: 2px 4px;
+}
+.segment-row .seg-params label {
+    color: var(--muted);
+    font-size: 10px;
+    text-align: right;
+}
+.segment-row .seg-params input {
+    padding: 1px 3px;
+    font-size: 11px;
+    width: 100%;
+}
+
+/* Path-specific canvas handles */
+.path-segment-dot {
+    fill: #ffffff;
+    stroke: var(--handle-stroke);
+    stroke-width: 1;
+    cursor: pointer;
+}
+.path-segment-dot.selected {
+    fill: var(--handle-stroke);
+}
+.path-cp-line {
+    stroke: var(--handle-stroke);
+    stroke-width: 0.5;
+    stroke-dasharray: 2 2;
+    fill: none;
+    pointer-events: none;
+}
+.path-cp-dot {
+    fill: #ffeb3b;
+    stroke: #a78a00;
+    stroke-width: 1;
+    cursor: move;
+}

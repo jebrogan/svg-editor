@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG Editor</title>
+    <link rel="stylesheet" href="svg-editor.css">
+</head>
+<body>
+    <div id="app">
+        <header id="topbar">
+            <span class="title">SVG Editor</span>
+            <span class="tool-status">Tool: <b id="tool-name">select</b></span>
+            <span class="precision-control">
+                Precision:
+                <select id="precision-select" title="Snap precision for arrows and drags. Does not affect existing values.">
+                    <option value="0">int</option>
+                    <option value="1" selected>0.1</option>
+                    <option value="2">0.01</option>
+                    <option value="3">0.001</option>
+                    <option value="4">0.0001</option>
+                    <option value="free">free</option>
+                </select>
+            </span>
+            <label class="grid-control">
+                <input type="checkbox" id="grid-toggle"> Grid
+            </label>
+            <label class="grid-control" title="Grid spacing">
+                Spacing:
+                <input type="range" id="grid-spacing" min="5" max="100" step="1" value="20">
+                <span id="grid-spacing-val" class="num">20</span>
+            </label>
+            <span class="spacer"></span>
+            <button id="btn-clear" title="Remove all elements">Clear</button>
+            <button id="btn-delete" title="Delete selected (Del)">Delete</button>
+        </header>
+
+        <aside id="palette">
+            <div class="section-label">Tools</div>
+            <button class="tool-btn" data-tool="select" title="Select / move">Select</button>
+            <div class="section-label">Add</div>
+            <button class="tool-btn" data-tool="rect">Rectangle</button>
+            <button class="tool-btn" data-tool="ellipse">Ellipse</button>
+            <button class="tool-btn" data-tool="circle">Circle</button>
+            <button class="tool-btn" data-tool="line">Line</button>
+            <button class="tool-btn" data-tool="text">Text</button>
+            <button class="tool-btn" data-tool="path">Path</button>
+        </aside>
+
+        <main id="canvas-wrap">
+            <div id="ruler-corner" class="ruler"></div>
+            <div id="ruler-top" class="ruler"></div>
+            <div id="ruler-left" class="ruler"></div>
+            <svg id="canvas" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+                <g id="grid"></g>
+                <g id="content"></g>
+                <g id="handles"></g>
+            </svg>
+        </main>
+
+        <aside id="inspector">
+            <div class="section-label">Inspector</div>
+            <div id="inspector-empty" class="muted">No selection</div>
+            <div id="inspector-body" hidden>
+                <div class="row">
+                    <label>ID</label>
+                    <input id="i-id" type="text" readonly>
+                </div>
+                <div class="row">
+                    <label>Type</label>
+                    <input id="i-type" type="text" readonly>
+                </div>
+
+                <div class="group" id="geom-group">
+                    <div class="section-label">Geometry</div>
+                    <div id="geom-fields"></div>
+                </div>
+
+                <div class="group">
+                    <div class="section-label">Fill</div>
+                    <div class="row">
+                        <label>Color</label>
+                        <input id="i-fill" type="color">
+                        <button class="mini" id="i-fill-none" title="No fill">none</button>
+                    </div>
+                    <div class="row">
+                        <label>Opacity</label>
+                        <input id="i-fill-opacity" type="range" min="0" max="1" step="0.05">
+                        <span id="i-fill-opacity-val" class="num"></span>
+                    </div>
+                </div>
+
+                <div class="group">
+                    <div class="section-label">Stroke</div>
+                    <div class="row">
+                        <label>Color</label>
+                        <input id="i-stroke" type="color">
+                        <button class="mini" id="i-stroke-none" title="No stroke">none</button>
+                    </div>
+                    <div class="row">
+                        <label>Width</label>
+                        <input id="i-stroke-width" type="number" min="0" step="0.5">
+                    </div>
+                    <div class="row">
+                        <label>Dash</label>
+                        <input id="i-stroke-dash" type="text" placeholder="e.g. 4 2">
+                    </div>
+                </div>
+
+                <div class="group" id="path-group" hidden>
+                    <div class="section-label">Path segments</div>
+                    <div id="path-segments"></div>
+                    <button id="path-add-segment" class="mini">+ Add segment</button>
+                </div>
+
+                <div class="group" id="text-group" hidden>
+                    <div class="section-label">Text</div>
+                    <div class="row">
+                        <label>Content</label>
+                        <input id="i-text-content" type="text">
+                    </div>
+                    <div class="row">
+                        <label>Font size</label>
+                        <input id="i-text-size" type="number" min="1" step="1">
+                    </div>
+                    <div class="row">
+                        <label>Family</label>
+                        <input id="i-text-family" type="text" placeholder="sans-serif">
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <section id="source-panel">
+            <div class="source-header">
+                <span class="section-label">SVG Source</span>
+                <button id="btn-open-source" title="Open an SVG file">Open</button>
+                <button id="btn-save-source" title="Save the current source to a file">Save</button>
+                <button id="btn-apply-source" title="Parse text and replace canvas">Apply</button>
+                <span id="source-status" class="muted"></span>
+                <input type="file" id="file-input" accept=".svg,image/svg+xml,text/xml" hidden>
+            </div>
+            <textarea id="source" spellcheck="false"></textarea>
+        </section>
+    </div>
+    <script src="svg-editor.js"></script>
+</body>
+</html>
