@@ -914,6 +914,7 @@ function render() {
     updateInspector();
     updateSource();
     updateToolUI();
+    updateMissingImagesStatus();
 }
 
 function getViewBox() {
@@ -2802,6 +2803,102 @@ function setSelectedImageHrefFromUrl() {
 
 document.getElementById('btn-image-file').addEventListener('click', replaceSelectedImageFromFile);
 document.getElementById('btn-image-url').addEventListener('click', setSelectedImageHrefFromUrl);
+
+// ===== Missing-image attach flow =====
+// An <image> element is "missing" if it has a non-data: non-http(s) href but
+// no _displayHref blob URL attached. Typically this happens right after
+// opening a saved .svg whose images live in a sibling directory the editor
+// cannot read directly. The user picks the image files via a multi-select
+// dialog and we match them by filename.
+function listMissingImages() {
+    const missing = [];
+    for (const el of state.elements) {
+        if (el.type !== 'image') continue;
+        if (el.attrs._displayHref) continue;
+        const href = el.attrs.href || '';
+        if (!href) continue;
+        if (href.startsWith('data:')) continue;
+        if (/^https?:/i.test(href)) continue;
+        const basename = href.split('/').pop() || href;
+        missing.push({ el, href, basename });
+    }
+    return missing;
+}
+
+function updateMissingImagesStatus() {
+    const btn = document.getElementById('btn-attach-images');
+    const status = document.getElementById('missing-images-status');
+    if (!btn || !status) return;
+    const missing = listMissingImages();
+    if (missing.length === 0) {
+        btn.hidden = true;
+        status.textContent = '';
+        status.title = '';
+        return;
+    }
+    btn.hidden = false;
+    const refs = [...new Set(missing.map(m => m.basename))];
+    status.textContent = `${missing.length} image${missing.length === 1 ? '' : 's'} unattached`;
+    status.title = 'Unattached: ' + refs.join(', ');
+}
+
+async function attachImagesFromFiles(files) {
+    const missing = listMissingImages();
+    const byName = new Map();
+    for (const f of files) byName.set(f.name, f);
+    let attached = 0;
+    for (const m of missing) {
+        const f = byName.get(m.basename);
+        if (!f) continue;
+        revokeDisplayHref(m.el.attrs);
+        m.el.attrs._displayHref = URL.createObjectURL(f);
+        attached++;
+    }
+    if (attached > 0) render();
+    return attached;
+}
+
+async function promptAttachImages() {
+    let files = [];
+    if (window.showOpenFilePicker) {
+        try {
+            const handles = await window.showOpenFilePicker({
+                multiple: true,
+                types: [{
+                    description: 'Image files',
+                    accept: { 'image/*': ['.png','.jpg','.jpeg','.gif','.webp','.svg','.bmp'] },
+                }],
+            });
+            for (const h of handles) files.push(await h.getFile());
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                showSourceStatus(`Attach images failed: ${err.message || err.name}`, true);
+            }
+            return;
+        }
+    } else {
+        files = await new Promise(resolve => {
+            const inp = document.createElement('input');
+            inp.type = 'file';
+            inp.accept = 'image/*';
+            inp.multiple = true;
+            inp.addEventListener('change', () => resolve(Array.from(inp.files || [])));
+            inp.click();
+        });
+    }
+    if (!files.length) return;
+    const attached = await attachImagesFromFiles(files);
+    const unmatched = files.length - attached;
+    if (attached === 0) {
+        showSourceStatus(`No matching images in ${files.length} file${files.length === 1 ? '' : 's'}`, true);
+    } else if (unmatched === 0) {
+        showSourceStatus(`Attached ${attached} image${attached === 1 ? '' : 's'}`, false);
+    } else {
+        showSourceStatus(`Attached ${attached}; ${unmatched} unmatched`, false);
+    }
+}
+
+document.getElementById('btn-attach-images').addEventListener('click', promptAttachImages);
 
 function applyImagePreserveAspectRatio() {
     const el = findElement(state.selectedId);
