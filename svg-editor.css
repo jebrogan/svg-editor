@@ -465,7 +465,7 @@ button.mini { padding: 2px 6px; font-size: 11px; }
 .segment-row.selected { background: rgba(79, 157, 255, 0.15); }
 .segment-row .seg-head {
     display: grid;
-    grid-template-columns: 22px auto auto 22px 22px;
+    grid-template-columns: 22px minmax(56px, 1fr) auto 22px 22px;
     align-items: center;
     gap: 4px;
 }
@@ -483,6 +483,18 @@ button.mini { padding: 2px 6px; font-size: 11px; }
     font: inherit;
     font-size: 11px;
     width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    cursor: pointer;
+    position: relative;
+    z-index: 1;
+}
+.segment-row select.seg-cmd:hover {
+    border-color: var(--accent);
+}
+.segment-row select.seg-cmd:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
 }
 .segment-row button.seg-rel,
 .segment-row button.seg-mini {

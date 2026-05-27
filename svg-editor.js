@@ -1065,11 +1065,9 @@ function buildGeomFields(el) {
         row.className = 'row';
         const lab = document.createElement('label');
         lab.textContent = f;
-        lab.title = `${el.type}.${f}`;
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.dataset.geomField = f;
-        inp.title = `${el.type}.${f}`;
         attachNumeric(inp, {
             getPrecision: () => state.precision,
             getStep: () => precisionStep(state.precision),
@@ -1289,7 +1287,6 @@ function buildSegmentRow(el, idx) {
     const idxLabel = document.createElement('span');
     idxLabel.className = 'seg-idx';
     idxLabel.textContent = idx;
-    idxLabel.title = `Segment ${idx}`;
     head.appendChild(idxLabel);
 
     const sel = document.createElement('select');
@@ -1301,7 +1298,6 @@ function buildSegmentRow(el, idx) {
         if (c === upper) opt.selected = true;
         sel.appendChild(opt);
     }
-    sel.title = 'Segment command (M moveto, L lineto, H/V horizontal/vertical, C cubic, S smooth cubic, Q quadratic, T smooth quadratic, A arc, Z close)';
     sel.addEventListener('change', (ev) => {
         const cur = findElement(state.selectedId);
         if (!cur || cur.type !== 'path') return;
@@ -1379,11 +1375,9 @@ function buildSegmentRow(el, idx) {
     for (let pi = 0; pi < labels.length; pi++) {
         const lab = document.createElement('label');
         lab.textContent = labels[pi];
-        lab.title = `${seg.cmd} param: ${labels[pi]}`;
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.dataset.paramIdx = pi;
-        inp.title = `${seg.cmd} param: ${labels[pi]}`;
         inp.value = String(seg.params[pi] ?? 0);
         attachNumeric(inp, {
             getPrecision: () => state.precision,
@@ -1460,14 +1454,12 @@ function buildPolyPointRow(el, idx) {
     const idxLabel = document.createElement('span');
     idxLabel.className = 'point-idx';
     idxLabel.textContent = idx;
-    idxLabel.title = `Point ${idx}`;
     head.appendChild(idxLabel);
 
     const makeInput = (axis) => {
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.dataset.coord = axis;
-        inp.title = `Vertex ${axis} coordinate`;
         inp.value = String(el.attrs.points[idx][axis === 'x' ? 0 : 1]);
         attachNumeric(inp, {
             getPrecision: () => state.precision,
