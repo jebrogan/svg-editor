@@ -1065,9 +1065,11 @@ function buildGeomFields(el) {
         row.className = 'row';
         const lab = document.createElement('label');
         lab.textContent = f;
+        lab.title = `${el.type}.${f}`;
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.dataset.geomField = f;
+        inp.title = `${el.type}.${f}`;
         attachNumeric(inp, {
             getPrecision: () => state.precision,
             getStep: () => precisionStep(state.precision),
@@ -1275,8 +1277,10 @@ function buildSegmentRow(el, idx) {
     row.addEventListener('click', (ev) => {
         if (ev.target.closest('button, select, input')) return;
         state.selectedSegmentIdx = idx;
+        const cur = findElement(state.selectedId);
+        if (!cur) return;
         renderHandles();
-        renderSegmentList(el);
+        renderSegmentList(cur);
     });
 
     const head = document.createElement('div');
@@ -1285,6 +1289,7 @@ function buildSegmentRow(el, idx) {
     const idxLabel = document.createElement('span');
     idxLabel.className = 'seg-idx';
     idxLabel.textContent = idx;
+    idxLabel.title = `Segment ${idx}`;
     head.appendChild(idxLabel);
 
     const sel = document.createElement('select');
@@ -1296,16 +1301,19 @@ function buildSegmentRow(el, idx) {
         if (c === upper) opt.selected = true;
         sel.appendChild(opt);
     }
+    sel.title = 'Segment command (M moveto, L lineto, H/V horizontal/vertical, C cubic, S smooth cubic, Q quadratic, T smooth quadratic, A arc, Z close)';
     sel.addEventListener('change', (ev) => {
+        const cur = findElement(state.selectedId);
+        if (!cur || cur.type !== 'path') return;
         flushDebounce();
         const newUpper = ev.target.value;
-        const wasAbs = (el.attrs.segments[idx].cmd === el.attrs.segments[idx].cmd.toUpperCase());
+        const wasAbs = (cur.attrs.segments[idx].cmd === cur.attrs.segments[idx].cmd.toUpperCase());
         const newCmd = wasAbs ? newUpper : newUpper.toLowerCase();
-        const calc = pathPoints(el.attrs.segments);
-        const cur = calc[idx].start;
-        el.attrs.segments[idx] = {
+        const calc = pathPoints(cur.attrs.segments);
+        const start = calc[idx].start;
+        cur.attrs.segments[idx] = {
             cmd: newCmd,
-            params: defaultSegmentParams(newCmd, cur),
+            params: defaultSegmentParams(newCmd, start),
         };
         segmentsBuiltSig = null;
         render();
@@ -1318,8 +1326,10 @@ function buildSegmentRow(el, idx) {
     relBtn.title = 'Toggle absolute / relative';
     relBtn.textContent = isAbs ? 'A' : 'r';
     relBtn.addEventListener('click', () => {
+        const cur = findElement(state.selectedId);
+        if (!cur || cur.type !== 'path') return;
         flushDebounce();
-        toggleSegmentAbs(el.attrs.segments, idx);
+        toggleSegmentAbs(cur.attrs.segments, idx);
         render();
         pushHistory();
     });
@@ -1330,8 +1340,10 @@ function buildSegmentRow(el, idx) {
     delBtn.title = 'Delete segment';
     delBtn.textContent = '×';
     delBtn.addEventListener('click', () => {
+        const cur = findElement(state.selectedId);
+        if (!cur || cur.type !== 'path') return;
         flushDebounce();
-        el.attrs.segments.splice(idx, 1);
+        cur.attrs.segments.splice(idx, 1);
         if (state.selectedSegmentIdx === idx) state.selectedSegmentIdx = null;
         else if (state.selectedSegmentIdx > idx) state.selectedSegmentIdx -= 1;
         segmentsBuiltSig = null;
@@ -1345,11 +1357,13 @@ function buildSegmentRow(el, idx) {
     insBtn.title = 'Insert segment after this one';
     insBtn.textContent = '+';
     insBtn.addEventListener('click', () => {
+        const cur = findElement(state.selectedId);
+        if (!cur || cur.type !== 'path') return;
         flushDebounce();
-        const calc = pathPoints(el.attrs.segments);
-        const cur = calc[idx].end;
-        const newSeg = { cmd: 'l', params: defaultSegmentParams('l', cur) };
-        el.attrs.segments.splice(idx + 1, 0, newSeg);
+        const calc = pathPoints(cur.attrs.segments);
+        const end = calc[idx].end;
+        const newSeg = { cmd: 'l', params: defaultSegmentParams('l', end) };
+        cur.attrs.segments.splice(idx + 1, 0, newSeg);
         state.selectedSegmentIdx = idx + 1;
         segmentsBuiltSig = null;
         render();
@@ -1365,15 +1379,19 @@ function buildSegmentRow(el, idx) {
     for (let pi = 0; pi < labels.length; pi++) {
         const lab = document.createElement('label');
         lab.textContent = labels[pi];
+        lab.title = `${seg.cmd} param: ${labels[pi]}`;
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.dataset.paramIdx = pi;
+        inp.title = `${seg.cmd} param: ${labels[pi]}`;
         inp.value = String(seg.params[pi] ?? 0);
         attachNumeric(inp, {
             getPrecision: () => state.precision,
             getStep: () => precisionStep(state.precision),
             onChange: (v) => {
-                el.attrs.segments[idx].params[pi] = v;
+                const cur = findElement(state.selectedId);
+                if (!cur || cur.type !== 'path') return;
+                cur.attrs.segments[idx].params[pi] = v;
                 render();
             },
         });
@@ -1430,8 +1448,10 @@ function buildPolyPointRow(el, idx) {
     row.addEventListener('click', (ev) => {
         if (ev.target.closest('button, input')) return;
         state.selectedSegmentIdx = idx;
+        const cur = findElement(state.selectedId);
+        if (!cur) return;
         renderHandles();
-        renderPolyPointList(el);
+        renderPolyPointList(cur);
     });
 
     const head = document.createElement('div');
@@ -1440,12 +1460,14 @@ function buildPolyPointRow(el, idx) {
     const idxLabel = document.createElement('span');
     idxLabel.className = 'point-idx';
     idxLabel.textContent = idx;
+    idxLabel.title = `Point ${idx}`;
     head.appendChild(idxLabel);
 
     const makeInput = (axis) => {
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.dataset.coord = axis;
+        inp.title = `Vertex ${axis} coordinate`;
         inp.value = String(el.attrs.points[idx][axis === 'x' ? 0 : 1]);
         attachNumeric(inp, {
             getPrecision: () => state.precision,
@@ -1467,8 +1489,10 @@ function buildPolyPointRow(el, idx) {
     delBtn.title = 'Delete point';
     delBtn.textContent = '×';
     delBtn.addEventListener('click', () => {
+        const cur = findElement(state.selectedId);
+        if (!cur || !cur.attrs.points) return;
         flushDebounce();
-        el.attrs.points.splice(idx, 1);
+        cur.attrs.points.splice(idx, 1);
         if (state.selectedSegmentIdx === idx) state.selectedSegmentIdx = null;
         else if (state.selectedSegmentIdx > idx) state.selectedSegmentIdx -= 1;
         polyPointsBuiltSig = null;
@@ -1482,14 +1506,16 @@ function buildPolyPointRow(el, idx) {
     insBtn.title = 'Insert point after this one';
     insBtn.textContent = '+';
     insBtn.addEventListener('click', () => {
+        const curEl = findElement(state.selectedId);
+        if (!curEl || !curEl.attrs.points) return;
         flushDebounce();
-        const pts = el.attrs.points;
+        const pts = curEl.attrs.points;
         const cur = pts[idx];
         let newPt;
         if (idx + 1 < pts.length) {
             const next = pts[idx + 1];
             newPt = [(cur[0] + next[0]) / 2, (cur[1] + next[1]) / 2];
-        } else if (el.type === 'polygon' && pts.length > 0) {
+        } else if (curEl.type === 'polygon' && pts.length > 0) {
             const next = pts[0];
             newPt = [(cur[0] + next[0]) / 2, (cur[1] + next[1]) / 2];
         } else {
@@ -1904,6 +1930,11 @@ function applySource() {
     state.elements = newElements;
     state.nextId = maxId;
     state.selectedId = null;
+    // Force inspector lists to rebuild on next render so any cached
+    // segment/point row closures don't reference orphaned el objects.
+    segmentsBuiltSig = null;
+    polyPointsBuiltSig = null;
+    inspectorBuiltForId = null;
     showSourceStatus('Applied', false);
     render();
     if (state.grid.enabled) renderHtmlRulers();

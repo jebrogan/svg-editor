@@ -110,7 +110,7 @@
                 <button id="btn-send-to-calc" class="mini" hidden title="Send the selected element (or its selected segment / vertex pair) to the calculator panel">Send to calculator</button>
 
                 <div class="group" id="geom-group">
-                    <div class="section-label">Geometry</div>
+                    <div class="section-label" title="Geometric attributes of the selected element">Geometry</div>
                     <div id="geom-fields"></div>
                 </div>
 
@@ -118,12 +118,12 @@
                     <div class="section-label">Fill</div>
                     <div class="row">
                         <label>Color</label>
-                        <input id="i-fill" type="color">
-                        <button class="mini" id="i-fill-none" title="No fill">none</button>
+                        <input id="i-fill" type="color" title="Fill color">
+                        <button class="mini" id="i-fill-none" title="No fill (transparent interior)">none</button>
                     </div>
                     <div class="row">
                         <label>Opacity</label>
-                        <input id="i-fill-opacity" type="range" min="0" max="1" step="0.05">
+                        <input id="i-fill-opacity" type="range" min="0" max="1" step="0.05" title="Fill opacity (0 = transparent, 1 = opaque)">
                         <span id="i-fill-opacity-val" class="num"></span>
                     </div>
                 </div>
@@ -132,29 +132,29 @@
                     <div class="section-label">Stroke</div>
                     <div class="row">
                         <label>Color</label>
-                        <input id="i-stroke" type="color">
-                        <button class="mini" id="i-stroke-none" title="No stroke">none</button>
+                        <input id="i-stroke" type="color" title="Stroke color">
+                        <button class="mini" id="i-stroke-none" title="No stroke (no outline)">none</button>
                     </div>
                     <div class="row">
                         <label>Width</label>
-                        <input id="i-stroke-width" type="number" min="0" step="0.5">
+                        <input id="i-stroke-width" type="number" min="0" step="0.5" title="Stroke width in user units">
                     </div>
                     <div class="row">
                         <label>Dash</label>
-                        <input id="i-stroke-dash" type="text" placeholder="e.g. 4 2">
+                        <input id="i-stroke-dash" type="text" placeholder="e.g. 4 2" title="stroke-dasharray: space- or comma-separated lengths (e.g. '4 2' for 4 on, 2 off). Empty for solid.">
                     </div>
                 </div>
 
                 <div class="group" id="path-group" hidden>
-                    <div class="section-label">Path segments</div>
+                    <div class="section-label" title="Per-segment editor for the selected <path>. Click an endpoint dot on the canvas to select a segment.">Path segments</div>
                     <div id="path-segments"></div>
-                    <button id="path-add-segment" class="mini">+ Add segment</button>
+                    <button id="path-add-segment" class="mini" title="Append a relative lineto (l) to the end of the path">+ Add segment</button>
                 </div>
 
                 <div class="group" id="poly-group" hidden>
-                    <div class="section-label">Points</div>
+                    <div class="section-label" title="Vertex list for the selected <polyline> / <polygon>. Click a vertex dot on the canvas to select it.">Points</div>
                     <div id="poly-points"></div>
-                    <button id="poly-add-point" class="mini">+ Add point</button>
+                    <button id="poly-add-point" class="mini" title="Append a new vertex at (last + 30, last + 30)">+ Add point</button>
                 </div>
 
                 <div class="group" id="image-group" hidden>
@@ -201,15 +201,15 @@
                     <div class="section-label">Text</div>
                     <div class="row">
                         <label>Content</label>
-                        <input id="i-text-content" type="text">
+                        <input id="i-text-content" type="text" title="The text glyphs displayed">
                     </div>
                     <div class="row">
                         <label>Font size</label>
-                        <input id="i-text-size" type="number" min="1" step="1">
+                        <input id="i-text-size" type="number" min="1" step="1" title="font-size in user units; arrows step by 1, typing accepts decimals">
                     </div>
                     <div class="row">
                         <label>Family</label>
-                        <input id="i-text-family" type="text" placeholder="sans-serif">
+                        <input id="i-text-family" type="text" placeholder="sans-serif" title="CSS font-family (e.g. sans-serif, serif, 'Courier New')">
                     </div>
                 </div>
             </div>
