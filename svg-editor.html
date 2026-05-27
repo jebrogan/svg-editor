@@ -79,6 +79,8 @@
             <button class="tool-btn" id="btn-z-forward" title="Bring forward one step (Ctrl+])">Forward</button>
             <button class="tool-btn" id="btn-z-backward" title="Send backward one step (Ctrl+[)">Backward</button>
             <button class="tool-btn" id="btn-z-back" title="Send to back (Ctrl+Shift+[)">To back</button>
+            <div class="section-label">Calculator</div>
+            <button class="tool-btn" id="calc-toggle" title="Show / hide the calculator panel">Show calc</button>
         </aside>
 
         <main id="canvas-wrap">
@@ -104,6 +106,8 @@
                     <label>Type</label>
                     <input id="i-type" type="text" readonly>
                 </div>
+
+                <button id="btn-send-to-calc" class="mini" hidden title="Send the selected element (or its selected segment / vertex pair) to the calculator panel">Send to calculator</button>
 
                 <div class="group" id="geom-group">
                     <div class="section-label">Geometry</div>
@@ -210,6 +214,25 @@
                 </div>
             </div>
         </aside>
+
+        <section id="calc-panel">
+            <div class="calc-header">
+                <span class="section-label">Calculator</span>
+                <label class="calc-prec">
+                    Precision:
+                    <select id="calc-precision" title="Number of decimal places to display (does not affect stored values)">
+                        <option value="0">int</option>
+                        <option value="1">0.1</option>
+                        <option value="2">0.01</option>
+                        <option value="3" selected>0.001</option>
+                        <option value="4">0.0001</option>
+                        <option value="free">free</option>
+                    </select>
+                </label>
+                <button id="calc-add-block" class="mini" title="Add an empty calculation block">+ Add block</button>
+            </div>
+            <div id="calc-blocks"></div>
+        </section>
 
         <section id="source-panel">
             <div class="source-header">

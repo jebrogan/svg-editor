@@ -26,6 +26,12 @@ const state = {
     canvasAspectLocked: false,
     canvasLockedAspect: null,
     lastImagePrefix: 'image/', // sticky default for new <image> href prefixes
+    calc: {
+        expanded: false,
+        precision: 3,         // independent of state.precision; 'free' allowed
+        blocks: [],           // { id, type, label, state }
+        nextId: 1,
+    },
 };
 
 // ===== Per-type behavior =====
@@ -1148,6 +1154,13 @@ function updateInspector() {
         renderPolyPointList(el);
     } else {
         polyGroup.hidden = true;
+    }
+
+    // Show "Send to calc" only when something the calculator can consume is selected.
+    const sendBtn = document.getElementById('btn-send-to-calc');
+    if (sendBtn) {
+        const applicable = Object.values(CALC_TYPES).some(def => def.applicableTo(el));
+        sendBtn.hidden = !applicable;
     }
 
     const imageGroup = document.getElementById('image-group');
@@ -2555,6 +2568,295 @@ document.getElementById('canvas-preset').addEventListener('change', (e) => {
     e.target.value = '';
     applyCanvasPreset(spec);
 });
+
+// ===== Calculator panel =====
+
+function calcPrecision() { return state.calc.precision; }
+function formatCalcNum(v) {
+    if (typeof v !== 'number' || !isFinite(v)) return '';
+    const p = state.calc.precision;
+    if (p === 'free') return String(v);
+    return Number(v.toFixed(p)).toString();
+}
+
+const CALC_TYPES = {
+    line: {
+        label: 'Line / segment',
+        defaults: () => ({ p1: { x: 0, y: 0 }, p2: { x: 100, y: 0 } }),
+        applicableTo: (el) => {
+            if (!el) return false;
+            if (el.type === 'line') return true;
+            if (el.type === 'path' && state.selectedSegmentIdx != null) {
+                const pts = pathPoints(el.attrs.segments || []);
+                return !!(pts[state.selectedSegmentIdx]);
+            }
+            if (el.type === 'polyline' || el.type === 'polygon') {
+                if (state.selectedSegmentIdx == null) return false;
+                const pts = el.attrs.points || [];
+                if (pts.length < 2) return false;
+                const idx = state.selectedSegmentIdx;
+                if (idx < pts.length - 1) return true;
+                if (el.type === 'polygon') return pts.length >= 2;
+                return false;
+            }
+            return false;
+        },
+        fromElement: (el) => {
+            if (el.type === 'line') {
+                return { p1: { x: el.attrs.x1, y: el.attrs.y1 },
+                         p2: { x: el.attrs.x2, y: el.attrs.y2 } };
+            }
+            if (el.type === 'path') {
+                const pts = pathPoints(el.attrs.segments || []);
+                const seg = pts[state.selectedSegmentIdx];
+                if (!seg) return null;
+                return { p1: { x: seg.start.x, y: seg.start.y },
+                         p2: { x: seg.end.x,   y: seg.end.y   } };
+            }
+            if (el.type === 'polyline' || el.type === 'polygon') {
+                const pts = el.attrs.points || [];
+                const idx = state.selectedSegmentIdx;
+                const a = pts[idx];
+                let b;
+                if (idx < pts.length - 1) b = pts[idx + 1];
+                else if (el.type === 'polygon') b = pts[0];
+                else return null;
+                return { p1: { x: a[0], y: a[1] }, p2: { x: b[0], y: b[1] } };
+            }
+            return null;
+        },
+        build: (block) => buildLineBlock(block),
+        sync: (block) => syncLineBlock(block),
+    },
+};
+
+function lineDerived(s) {
+    const dx = s.p2.x - s.p1.x;
+    const dy = s.p2.y - s.p1.y;
+    const len = Math.hypot(dx, dy);
+    // Screen convention: y-down, atan2(dy, dx) is positive clockwise from +x.
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    return { dx, dy, len, angle };
+}
+
+function updateLineField(block, kind, value) {
+    const s = block.state;
+    const { p1, p2 } = s;
+    switch (kind) {
+        case 'p1x': p1.x = value; break;
+        case 'p1y': p1.y = value; break;
+        case 'p2x': p2.x = value; break;
+        case 'p2y': p2.y = value; break;
+        case 'dx':  p2.x = p1.x + value; break;
+        case 'dy':  p2.y = p1.y + value; break;
+        case 'len': {
+            const dx0 = p2.x - p1.x, dy0 = p2.y - p1.y;
+            const cur = Math.hypot(dx0, dy0);
+            if (cur === 0) {
+                // No direction known; lay along +x.
+                p2.x = p1.x + value;
+                p2.y = p1.y;
+            } else {
+                const k = value / cur;
+                p2.x = p1.x + dx0 * k;
+                p2.y = p1.y + dy0 * k;
+            }
+            break;
+        }
+        case 'angle': {
+            const cur = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+            const rad = value * Math.PI / 180;
+            p2.x = p1.x + cur * Math.cos(rad);
+            p2.y = p1.y + cur * Math.sin(rad);
+            break;
+        }
+    }
+    syncLineBlock(block);
+}
+
+function buildLineBlock(block) {
+    const root = document.createElement('div');
+    root.className = 'calc-block';
+    root.dataset.blockId = block.id;
+
+    const head = document.createElement('div');
+    head.className = 'calc-block-head';
+
+    const labelInp = document.createElement('input');
+    labelInp.className = 'calc-label';
+    labelInp.placeholder = '(label)';
+    labelInp.value = block.label || '';
+    labelInp.addEventListener('input', () => { block.label = labelInp.value; });
+    head.appendChild(labelInp);
+
+    const typeTag = document.createElement('span');
+    typeTag.className = 'calc-type-tag';
+    typeTag.textContent = 'line';
+    head.appendChild(typeTag);
+
+    const del = document.createElement('button');
+    del.className = 'seg-mini';
+    del.textContent = '×';
+    del.title = 'Delete block';
+    del.addEventListener('click', () => deleteCalcBlock(block.id));
+    head.appendChild(del);
+
+    root.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'calc-fields';
+
+    const addRow = (rowLabel, items) => {
+        const row = document.createElement('div');
+        row.className = 'calc-row';
+        const lab = document.createElement('span');
+        lab.className = 'calc-row-label';
+        lab.textContent = rowLabel;
+        row.appendChild(lab);
+        for (const it of items) row.appendChild(it);
+        grid.appendChild(row);
+    };
+
+    const makeField = (sub, kind, unit) => {
+        const wrap = document.createElement('label');
+        wrap.className = 'calc-field';
+        const sp = document.createElement('span');
+        sp.className = 'calc-field-sub';
+        sp.textContent = sub;
+        wrap.appendChild(sp);
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.dataset.kind = kind;
+        wrap.appendChild(inp);
+        if (unit) {
+            const u = document.createElement('span');
+            u.className = 'calc-field-unit';
+            u.textContent = unit;
+            wrap.appendChild(u);
+        }
+        attachNumeric(inp, {
+            getPrecision: () => calcPrecision(),
+            getStep: () => precisionStep(calcPrecision()),
+            onChange: (v) => updateLineField(block, kind, v),
+        });
+        return wrap;
+    };
+
+    addRow('p1', [makeField('x', 'p1x'), makeField('y', 'p1y')]);
+    addRow('p2', [makeField('x', 'p2x'), makeField('y', 'p2y')]);
+    addRow('Δ',  [makeField('dx', 'dx'), makeField('dy', 'dy')]);
+    addRow('',   [makeField('len', 'len'), makeField('ang', 'angle', '°')]);
+
+    root.appendChild(grid);
+    syncLineBlock(block, root);
+    return root;
+}
+
+function syncLineBlock(block, rootHint) {
+    const root = rootHint || document.querySelector(`.calc-block[data-block-id="${block.id}"]`);
+    if (!root) return;
+    const d = lineDerived(block.state);
+    const values = {
+        p1x: block.state.p1.x, p1y: block.state.p1.y,
+        p2x: block.state.p2.x, p2y: block.state.p2.y,
+        dx: d.dx, dy: d.dy, len: d.len, angle: d.angle,
+    };
+    for (const inp of root.querySelectorAll('input[data-kind]')) {
+        if (document.activeElement === inp) continue;
+        inp.value = formatCalcNum(values[inp.dataset.kind]);
+    }
+}
+
+function renderCalcPanel() {
+    const container = document.getElementById('calc-blocks');
+    if (!container) return;
+    const expectedIds = state.calc.blocks.map(b => b.id);
+    const existing = [...container.querySelectorAll('.calc-block')].map(n => n.dataset.blockId);
+    const sameOrder = expectedIds.length === existing.length &&
+                      expectedIds.every((id, i) => id === existing[i]);
+    if (!sameOrder) {
+        container.innerHTML = '';
+        for (const block of state.calc.blocks) {
+            const def = CALC_TYPES[block.type];
+            if (!def) continue;
+            container.appendChild(def.build(block));
+        }
+    }
+    for (const block of state.calc.blocks) {
+        const def = CALC_TYPES[block.type];
+        if (def) def.sync(block);
+    }
+}
+
+function applyCalcVisibility() {
+    document.getElementById('app').classList.toggle('calc-on', state.calc.expanded);
+    const btn = document.getElementById('calc-toggle');
+    if (btn) btn.textContent = state.calc.expanded ? 'Hide calc' : 'Show calc';
+    if (state.calc.expanded && state.grid.enabled) {
+        requestAnimationFrame(renderHtmlRulers);
+    }
+}
+
+function addCalcBlock(typeName, data, label) {
+    const def = CALC_TYPES[typeName];
+    if (!def) return;
+    const block = {
+        id: 'cb-' + state.calc.nextId++,
+        type: typeName,
+        label: label || '',
+        state: data ? data : def.defaults(),
+    };
+    state.calc.blocks.push(block);
+    renderCalcPanel();
+    // Scroll the new block into view.
+    requestAnimationFrame(() => {
+        const node = document.querySelector(`.calc-block[data-block-id="${block.id}"]`);
+        if (node) node.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    });
+    return block;
+}
+
+function deleteCalcBlock(id) {
+    const idx = state.calc.blocks.findIndex(b => b.id === id);
+    if (idx < 0) return;
+    state.calc.blocks.splice(idx, 1);
+    renderCalcPanel();
+}
+
+function sendSelectionToCalc() {
+    const el = findElement(state.selectedId);
+    if (!el) return;
+    for (const [typeName, def] of Object.entries(CALC_TYPES)) {
+        if (def.applicableTo(el)) {
+            const data = def.fromElement(el);
+            if (data) {
+                state.calc.expanded = true;
+                applyCalcVisibility();
+                addCalcBlock(typeName, data, '');
+                return;
+            }
+        }
+    }
+}
+
+// Wire calculator UI
+document.getElementById('calc-toggle').addEventListener('click', () => {
+    state.calc.expanded = !state.calc.expanded;
+    applyCalcVisibility();
+});
+document.getElementById('calc-add-block').addEventListener('click', () => {
+    addCalcBlock('line', null, '');
+});
+document.getElementById('calc-precision').addEventListener('change', (e) => {
+    const v = e.target.value;
+    state.calc.precision = (v === 'free') ? 'free' : parseInt(v, 10);
+    // Re-format displayed values.
+    for (const block of state.calc.blocks) {
+        const def = CALC_TYPES[block.type];
+        if (def) def.sync(block);
+    }
+});
+document.getElementById('btn-send-to-calc').addEventListener('click', sendSelectionToCalc);
 
 // ===== Init =====
 wireInspector();
