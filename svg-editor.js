@@ -590,6 +590,61 @@ function serializeTransform(ops) {
     return ops.map(op => `${op.type}(${op.params.map(formatPathNum).join(' ')})`).join(' ');
 }
 
+// Build a DOMMatrix that maps element-local coordinates to the parent (viewBox)
+// coordinate system, given the element's parsed transform op list.
+function transformMatrix(ops) {
+    let m = new DOMMatrix();
+    if (!ops || !ops.length) return m;
+    for (const op of ops) {
+        const p = op.params;
+        switch (op.type) {
+            case 'translate':
+                m = m.translate(p[0] || 0, p[1] || 0);
+                break;
+            case 'rotate':
+                if (p.length >= 3 && (p[1] !== 0 || p[2] !== 0)) {
+                    m = m.translate(p[1], p[2]).rotate(p[0]).translate(-p[1], -p[2]);
+                } else {
+                    m = m.rotate(p[0] || 0);
+                }
+                break;
+            case 'scale':
+                m = m.scale(p[0] ?? 1, (p[1] === undefined ? p[0] : p[1]) ?? 1);
+                break;
+            case 'skewX':
+                m = m.skewX(p[0] || 0);
+                break;
+            case 'skewY':
+                m = m.skewY(p[0] || 0);
+                break;
+            case 'matrix':
+                m = m.multiply(new DOMMatrix([p[0], p[1], p[2], p[3], p[4], p[5]]));
+                break;
+        }
+    }
+    return m;
+}
+
+// viewBox point → element-local point (applies full inverse: linear + translation)
+function viewBoxPointToLocal(point, ops) {
+    if (!ops || !ops.length) return { x: point.x, y: point.y };
+    const inv = transformMatrix(ops).inverse();
+    return {
+        x: inv.a * point.x + inv.c * point.y + inv.e,
+        y: inv.b * point.x + inv.d * point.y + inv.f,
+    };
+}
+
+// viewBox delta → element-local delta (linear part only; no translation)
+function viewBoxDeltaToLocal(dx, dy, ops) {
+    if (!ops || !ops.length) return { dx, dy };
+    const inv = transformMatrix(ops).inverse();
+    return {
+        dx: inv.a * dx + inv.c * dy,
+        dy: inv.b * dx + inv.d * dy,
+    };
+}
+
 // ===== Undo / redo history =====
 const HISTORY_MAX = 100;
 const history = {
@@ -972,6 +1027,17 @@ function renderHandles() {
     if (!el) return;
     const def = TYPES[el.type];
 
+    // If the element has a transform, route all handle DOM into a <g> with
+    // the same transform so the outline / handles visually wrap the rendered
+    // (transformed) element. Drag math compensates by inverting this transform.
+    let target = handlesLayer;
+    if (Array.isArray(el.attrs.transform) && el.attrs.transform.length) {
+        const wrap = document.createElementNS(SVG_NS, 'g');
+        wrap.setAttribute('transform', serializeTransform(el.attrs.transform));
+        handlesLayer.appendChild(wrap);
+        target = wrap;
+    }
+
     const bb = computeBBox(el);
     if (bb) {
         const pad = 2;
@@ -981,7 +1047,7 @@ function renderHandles() {
         outline.setAttribute('y', bb.y - pad);
         outline.setAttribute('width', bb.width + 2 * pad);
         outline.setAttribute('height', bb.height + 2 * pad);
-        handlesLayer.appendChild(outline);
+        target.appendChild(outline);
     }
 
     // Bbox scale handles: shown for any element with a non-degenerate bbox.
@@ -995,16 +1061,16 @@ function renderHandles() {
             sq.setAttribute('width', HANDLE_SIZE);
             sq.setAttribute('height', HANDLE_SIZE);
             sq.setAttribute('data-handle', 'scale-' + d);
-            handlesLayer.appendChild(sq);
+            target.appendChild(sq);
         }
     }
 
     if (el.type === 'path') {
-        renderPathHandles(el);
+        renderPathHandles(el, target);
         return;
     }
     if (el.type === 'polyline' || el.type === 'polygon') {
-        renderPolyHandles(el);
+        renderPolyHandles(el, target);
         return;
     }
 
@@ -1021,11 +1087,11 @@ function renderHandles() {
         sq.setAttribute('width', HANDLE_SIZE);
         sq.setAttribute('height', HANDLE_SIZE);
         sq.setAttribute('data-handle', h.name);
-        handlesLayer.appendChild(sq);
+        target.appendChild(sq);
     }
 }
 
-function renderPolyHandles(el) {
+function renderPolyHandles(el, target) {
     const pts = el.attrs.points || [];
     const DOT = 6;
     for (let i = 0; i < pts.length; i++) {
@@ -1038,11 +1104,11 @@ function renderPolyHandles(el) {
         dot.setAttribute('r', DOT / 2);
         dot.setAttribute('data-segment-idx', i);
         dot.setAttribute('data-handle', 'poly-point');
-        handlesLayer.appendChild(dot);
+        target.appendChild(dot);
     }
 }
 
-function renderPathHandles(el) {
+function renderPathHandles(el, target) {
     const segs = el.attrs.segments || [];
     const pts = pathPoints(segs);
     const DOT = 6;
@@ -1058,7 +1124,7 @@ function renderPathHandles(el) {
         dot.setAttribute('r', DOT / 2);
         dot.setAttribute('data-segment-idx', i);
         dot.setAttribute('data-handle', 'seg-end');
-        handlesLayer.appendChild(dot);
+        target.appendChild(dot);
     }
 
     // Control point handles for the selected segment
@@ -1077,7 +1143,7 @@ function renderPathHandles(el) {
         line.setAttribute('y1', anchor.y);
         line.setAttribute('x2', p.x);
         line.setAttribute('y2', p.y);
-        handlesLayer.appendChild(line);
+        target.appendChild(line);
         // Control point dot
         const dot = document.createElementNS(SVG_NS, 'circle');
         dot.setAttribute('class', 'path-cp-dot');
@@ -1086,7 +1152,7 @@ function renderPathHandles(el) {
         dot.setAttribute('r', DOT / 2);
         dot.setAttribute('data-segment-idx', idx);
         dot.setAttribute('data-handle', name);
-        handlesLayer.appendChild(dot);
+        target.appendChild(dot);
     };
     if (calc.cp1) addCp('cp1', calc.cp1);
     if (calc.cp2) addCp('cp2', calc.cp2);
@@ -2362,7 +2428,7 @@ canvas.addEventListener('pointerdown', (e) => {
             kind: 'handle',
             handleName,
             startPoint: p,
-            startAttrs: { ...el.attrs },
+            startAttrs: cloneAttrs(el.attrs),
         };
         canvas.setPointerCapture(e.pointerId);
         e.preventDefault();
@@ -2407,23 +2473,30 @@ canvas.addEventListener('pointermove', (e) => {
     const el = findElement(state.selectedId);
     if (!el) return;
     const def = TYPES[el.type];
+    // The element's transform is captured at drag-start (in drag.startAttrs)
+    // and does not change during the drag, so we use it for all inverse-
+    // transform math to convert viewBox coords into element-local coords.
+    const ops = (drag.startAttrs && Array.isArray(drag.startAttrs.transform))
+        ? drag.startAttrs.transform : null;
     if (drag.kind === 'move') {
-        const dx = p.x - drag.startPoint.x;
-        const dy = p.y - drag.startPoint.y;
+        const dxv = p.x - drag.startPoint.x;
+        const dyv = p.y - drag.startPoint.y;
+        const local = viewBoxDeltaToLocal(dxv, dyv, ops);
         el.attrs = cloneAttrs(drag.startAttrs);
-        def.translate(el.attrs, dx, dy);
+        def.translate(el.attrs, local.dx, local.dy);
         snapGeom(el, state.precision);
     } else if (drag.kind === 'scale') {
         // Scale relative to the bbox at drag-start. Precision is intentionally
         // NOT honored for scale (per spec).
+        const localP = viewBoxPointToLocal(p, ops);
         const bb = drag.origBBox;
         const anchor = drag.anchor;
         const orig = bboxHandlePos(drag.dir, bb);
         const hasX = drag.dir.includes('e') || drag.dir.includes('w');
         const hasY = drag.dir.includes('n') || drag.dir.includes('s');
         let sx = 1, sy = 1;
-        if (hasX && (orig.x - anchor.x) !== 0) sx = (p.x - anchor.x) / (orig.x - anchor.x);
-        if (hasY && (orig.y - anchor.y) !== 0) sy = (p.y - anchor.y) / (orig.y - anchor.y);
+        if (hasX && (orig.x - anchor.x) !== 0) sx = (localP.x - anchor.x) / (orig.x - anchor.x);
+        if (hasY && (orig.y - anchor.y) !== 0) sy = (localP.y - anchor.y) / (orig.y - anchor.y);
         const isCorner = (drag.dir.length === 2);
         if (isCorner && e.shiftKey) {
             const mag = Math.max(Math.abs(sx), Math.abs(sy));
@@ -2433,22 +2506,25 @@ canvas.addEventListener('pointermove', (e) => {
         el.attrs = cloneAttrs(drag.startAttrs);
         if (def.scaleAround) def.scaleAround(el.attrs, anchor, sx, sy);
     } else if (drag.kind === 'path-handle') {
+        const localP = viewBoxPointToLocal(p, ops);
         el.attrs = cloneAttrs(drag.startAttrs);
         const snapped = state.precision === 'free'
-            ? p
-            : { x: roundTo(p.x, state.precision), y: roundTo(p.y, state.precision) };
+            ? localP
+            : { x: roundTo(localP.x, state.precision), y: roundTo(localP.y, state.precision) };
         applyPathHandle(el.attrs.segments, drag.segIdx, drag.handleName, snapped);
     } else if (drag.kind === 'poly-handle') {
+        const localP = viewBoxPointToLocal(p, ops);
         el.attrs = cloneAttrs(drag.startAttrs);
         const snapped = state.precision === 'free'
-            ? p
-            : { x: roundTo(p.x, state.precision), y: roundTo(p.y, state.precision) };
+            ? localP
+            : { x: roundTo(localP.x, state.precision), y: roundTo(localP.y, state.precision) };
         if (el.attrs.points && el.attrs.points[drag.ptIdx]) {
             el.attrs.points[drag.ptIdx] = [snapped.x, snapped.y];
         }
     } else {
-        el.attrs = { ...drag.startAttrs };
-        def.applyHandle(el.attrs, drag.handleName, p);
+        const localP = viewBoxPointToLocal(p, ops);
+        el.attrs = cloneAttrs(drag.startAttrs);
+        def.applyHandle(el.attrs, drag.handleName, localP);
         snapGeom(el, state.precision);
     }
     render();
