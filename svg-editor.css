@@ -134,6 +134,12 @@ button:disabled:hover { background: var(--panel-2); }
     padding: 10px;
     overflow-y: auto;
 }
+#palette #working-dir {
+    width: 100%;
+    margin: 2px 0;
+    padding: 3px 6px;
+    font-size: 12px;
+}
 #palette .tool-btn {
     display: block;
     width: 100%;

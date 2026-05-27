@@ -26,6 +26,7 @@ const state = {
     canvasAspectLocked: false,
     canvasLockedAspect: null,
     lastImagePrefix: 'image/', // sticky default for new <image> href prefixes
+    workingDir: 'projects',    // path prefix suggested for Save/Open filenames
     calc: {
         expanded: false,
         precision: 3,         // independent of state.precision; 'free' allowed
@@ -2208,6 +2209,23 @@ const svgPickerTypes = [{
     accept: { 'image/svg+xml': ['.svg'] },
 }];
 
+// Strip leading/trailing slashes and return "<dir>/" or "" so callers can
+// just concatenate this in front of a basename.
+function workingDirPrefix() {
+    const wd = (state.workingDir || '').replace(/^\/+|\/+$/g, '');
+    return wd ? wd + '/' : '';
+}
+
+// Suggest a filename that includes the working-dir prefix when the existing
+// lastFilename is just a basename (no slashes). Most browsers will strip the
+// prefix from a Save dialog's suggestedName, but the prompt-fallback shows
+// it intact, and Chromium's save dialog at least displays the full string.
+function suggestedSaveName(base) {
+    const name = base || lastFilename || 'drawing.svg';
+    if (name.includes('/')) return name; // user-supplied path; leave alone
+    return workingDirPrefix() + name;
+}
+
 async function saveSourceToFile() {
     const txt = sourceEl.value;
     if (!txt.trim()) {
@@ -2218,7 +2236,7 @@ async function saveSourceToFile() {
     if (window.showSaveFilePicker) {
         try {
             const handle = await window.showSaveFilePicker({
-                suggestedName: lastFilename,
+                suggestedName: suggestedSaveName(),
                 types: svgPickerTypes,
             });
             const writable = await handle.createWritable();
@@ -2234,10 +2252,10 @@ async function saveSourceToFile() {
         return;
     }
     // Fallback: prompt for filename, then trigger a download via blob URL.
-    const input = prompt('Save as (filename):', lastFilename);
+    const input = prompt('Save as (filename):', suggestedSaveName());
     if (input === null) return;
     const name = input.trim() || 'drawing.svg';
-    lastFilename = name;
+    lastFilename = name.split('/').pop() || name;
     const blob = new Blob([txt], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -3162,6 +3180,21 @@ document.getElementById('calc-precision').addEventListener('change', (e) => {
     }
 });
 document.getElementById('btn-send-to-calc').addEventListener('click', sendSelectionToCalc);
+
+// Working directory: a plain path-prefix string, persisted in localStorage so
+// it survives reloads, and editable from the palette. Not enforced by the
+// editor (browsers without File System Access API can't read directories
+// programmatically) — it just feeds into Save/Open filename suggestions.
+const workingDirInput = document.getElementById('working-dir');
+try {
+    const stored = localStorage.getItem('svgEditor.workingDir');
+    if (stored != null) state.workingDir = stored;
+} catch (_) {}
+workingDirInput.value = state.workingDir;
+workingDirInput.addEventListener('input', () => {
+    state.workingDir = workingDirInput.value;
+    try { localStorage.setItem('svgEditor.workingDir', state.workingDir); } catch (_) {}
+});
 
 // ===== Init =====
 wireInspector();
