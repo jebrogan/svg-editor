@@ -1,3 +1,6 @@
 # Local user content — drawings, images, and session files live here
 # and are not tracked.
 /projects/
+
+# AI-assistant project context and settings (not for the repo).
+/.claude/
