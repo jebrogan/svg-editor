@@ -533,6 +533,58 @@ button.mini { padding: 2px 6px; font-size: 11px; }
     cursor: move;
 }
 
+/* Transform editor */
+#transform-ops {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.15);
+}
+.transform-op {
+    border-top: 1px solid var(--border);
+    padding: 4px 2px;
+    display: grid;
+    grid-template-columns: 72px 1fr 22px;
+    align-items: center;
+    gap: 4px;
+}
+.transform-op:first-child { border-top: none; }
+.transform-op select.op-type {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 4px;
+    font: inherit;
+    font-size: 11px;
+}
+.transform-op .op-params {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 4px;
+    min-width: 0;
+}
+.transform-op .op-param-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+}
+.transform-op .op-param-label {
+    color: var(--muted);
+    font-size: 10px;
+    min-width: 14px;
+    text-align: right;
+}
+.transform-op .op-param-cell input {
+    flex: 1;
+    min-width: 0;
+    padding: 1px 3px;
+    font-size: 11px;
+}
+
 /* Polyline / polygon point editor */
 #poly-points {
     max-height: 320px;

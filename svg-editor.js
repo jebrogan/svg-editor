@@ -549,6 +549,47 @@ const NUMERIC_ATTRS = new Set([
     'x1','y1','x2','y2','stroke-width','fill-opacity','font-size'
 ]);
 
+// ===== transform="..." helpers =====
+const TRANSFORM_OPS = {
+    translate: { params: ['tx', 'ty'],                   defaults: () => [0, 0] },
+    rotate:    { params: ['angle', 'cx', 'cy'],          defaults: () => [0, 0, 0] },
+    scale:     { params: ['sx', 'sy'],                   defaults: () => [1, 1] },
+    skewX:     { params: ['angle'],                      defaults: () => [0] },
+    skewY:     { params: ['angle'],                      defaults: () => [0] },
+    matrix:    { params: ['a','b','c','d','e','f'],      defaults: () => [1, 0, 0, 1, 0, 0] },
+};
+
+function parseTransform(s) {
+    if (!s || !s.trim()) return [];
+    const ops = [];
+    const re = /([A-Za-z]+)\s*\(\s*([^)]*)\s*\)/g;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+        const type = m[1];
+        const def = TRANSFORM_OPS[type];
+        if (!def) throw new Error(`unknown function "${type}"`);
+        const tokens = m[2].split(/[\s,]+/).filter(Boolean).map(Number);
+        if (tokens.some(v => Number.isNaN(v))) {
+            throw new Error(`non-numeric parameter for ${type}`);
+        }
+        // Resolve SVG shorthand forms to canonical full param lists.
+        let params;
+        if (type === 'scale' && tokens.length === 1) {
+            params = [tokens[0], tokens[0]];
+        } else {
+            params = def.defaults();
+            for (let i = 0; i < tokens.length && i < params.length; i++) params[i] = tokens[i];
+        }
+        ops.push({ type, params });
+    }
+    return ops;
+}
+
+function serializeTransform(ops) {
+    if (!ops || !ops.length) return '';
+    return ops.map(op => `${op.type}(${op.params.map(formatPathNum).join(' ')})`).join(' ');
+}
+
 // ===== Undo / redo history =====
 const HISTORY_MAX = 100;
 const history = {
@@ -620,6 +661,7 @@ function restoreSnapshot(snap) {
     }
     segmentsBuiltSig = null;
     polyPointsBuiltSig = null;
+    transformOpsBuiltSig = null;
     inspectorBuiltForId = null;
     render();
 }
@@ -759,6 +801,7 @@ function applyAttrs(node, el) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
         }
         node.textContent = a.content ?? '';
+        applyTransformAttr(node, a);
         return;
     }
     if (el.type === 'path') {
@@ -766,6 +809,7 @@ function applyAttrs(node, el) {
         for (const k of ['fill','stroke','stroke-width','fill-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
         }
+        applyTransformAttr(node, a);
         return;
     }
     if (el.type === 'polyline' || el.type === 'polygon') {
@@ -773,6 +817,7 @@ function applyAttrs(node, el) {
         for (const k of ['fill','stroke','stroke-width','fill-opacity','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
         }
+        applyTransformAttr(node, a);
         return;
     }
     if (el.type === 'image') {
@@ -785,12 +830,20 @@ function applyAttrs(node, el) {
         // bare filename relative to the eventual SVG location.
         const renderHref = a._displayHref || a.href;
         if (renderHref) node.setAttribute('href', renderHref);
+        applyTransformAttr(node, a);
         return;
     }
     for (const [k, v] of Object.entries(a)) {
-        if (k === 'content') continue;
+        if (k === 'content' || k === 'transform') continue;
         if (v === undefined || v === null || v === '') continue;
         node.setAttribute(k, v);
+    }
+    applyTransformAttr(node, a);
+}
+
+function applyTransformAttr(node, a) {
+    if (Array.isArray(a.transform) && a.transform.length) {
+        node.setAttribute('transform', serializeTransform(a.transform));
     }
 }
 
@@ -1140,6 +1193,13 @@ function updateInspector() {
         textGroup.hidden = true;
     }
 
+    // Transform group is applicable to every supported element type.
+    const transformGroup = document.getElementById('transform-group');
+    if (transformGroup) {
+        transformGroup.hidden = false;
+        renderTransformOps(el);
+    }
+
     const pathGroup = document.getElementById('path-group');
     if (el.type === 'path') {
         pathGroup.hidden = false;
@@ -1224,6 +1284,129 @@ function updateImageHrefDisplay(href) {
     span.textContent = display;
     span.title = full;
 }
+
+// ===== Transform editor =====
+let transformOpsBuiltSig = null;
+
+function transformSig(el) {
+    const ops = el.attrs.transform || [];
+    return el.id + '|' + ops.map(o => o.type).join(',');
+}
+
+function renderTransformOps(el) {
+    const sig = transformSig(el);
+    const container = document.getElementById('transform-ops');
+    if (!container) return;
+    if (transformOpsBuiltSig !== sig) {
+        buildTransformOpList(el);
+        transformOpsBuiltSig = sig;
+    }
+    const ops = el.attrs.transform || [];
+    for (const row of container.querySelectorAll('.transform-op')) {
+        const i = parseInt(row.dataset.opIdx, 10);
+        const op = ops[i];
+        if (!op) continue;
+        for (const inp of row.querySelectorAll('input[data-param-idx]')) {
+            const pi = parseInt(inp.dataset.paramIdx, 10);
+            if (document.activeElement !== inp) inp.value = String(op.params[pi] ?? 0);
+        }
+    }
+}
+
+function buildTransformOpList(el) {
+    const container = document.getElementById('transform-ops');
+    container.innerHTML = '';
+    const ops = el.attrs.transform || [];
+    for (let i = 0; i < ops.length; i++) {
+        container.appendChild(buildTransformOpRow(el, i));
+    }
+}
+
+function buildTransformOpRow(el, idx) {
+    const op = el.attrs.transform[idx];
+    const def = TRANSFORM_OPS[op.type];
+    const row = document.createElement('div');
+    row.className = 'transform-op';
+    row.dataset.opIdx = idx;
+
+    const sel = document.createElement('select');
+    sel.className = 'op-type';
+    for (const t of Object.keys(TRANSFORM_OPS)) {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        if (t === op.type) opt.selected = true;
+        sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+        const cur = findElement(state.selectedId);
+        if (!cur || !Array.isArray(cur.attrs.transform) || !cur.attrs.transform[idx]) return;
+        flushDebounce();
+        const newType = sel.value;
+        cur.attrs.transform[idx] = { type: newType, params: TRANSFORM_OPS[newType].defaults() };
+        transformOpsBuiltSig = null;
+        render();
+        pushHistory();
+    });
+    row.appendChild(sel);
+
+    const paramsBox = document.createElement('div');
+    paramsBox.className = 'op-params';
+    for (let pi = 0; pi < def.params.length; pi++) {
+        const cell = document.createElement('div');
+        cell.className = 'op-param-cell';
+        const lab = document.createElement('span');
+        lab.className = 'op-param-label';
+        lab.textContent = def.params[pi];
+        cell.appendChild(lab);
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.dataset.paramIdx = pi;
+        inp.value = String(op.params[pi] ?? 0);
+        attachNumeric(inp, {
+            getPrecision: () => state.precision,
+            getStep: () => precisionStep(state.precision),
+            onChange: (v) => {
+                const cur = findElement(state.selectedId);
+                if (!cur || !Array.isArray(cur.attrs.transform) || !cur.attrs.transform[idx]) return;
+                cur.attrs.transform[idx].params[pi] = v;
+                render();
+            },
+        });
+        cell.appendChild(inp);
+        paramsBox.appendChild(cell);
+    }
+    row.appendChild(paramsBox);
+
+    const del = document.createElement('button');
+    del.className = 'seg-mini';
+    del.title = 'Delete transform';
+    del.textContent = '×';
+    del.addEventListener('click', () => {
+        const cur = findElement(state.selectedId);
+        if (!cur || !Array.isArray(cur.attrs.transform)) return;
+        flushDebounce();
+        cur.attrs.transform.splice(idx, 1);
+        if (cur.attrs.transform.length === 0) delete cur.attrs.transform;
+        transformOpsBuiltSig = null;
+        render();
+        pushHistory();
+    });
+    row.appendChild(del);
+
+    return row;
+}
+
+document.getElementById('transform-add-op').addEventListener('click', () => {
+    const el = findElement(state.selectedId);
+    if (!el) return;
+    flushDebounce();
+    if (!Array.isArray(el.attrs.transform)) el.attrs.transform = [];
+    el.attrs.transform.push({ type: 'translate', params: TRANSFORM_OPS.translate.defaults() });
+    transformOpsBuiltSig = null;
+    render();
+    pushHistory();
+});
 
 // ===== Path segment editor =====
 let segmentsBuiltSig = null;
@@ -1761,10 +1944,16 @@ function applyCanvasPreset(spec) {
 function serializeElement(el) {
     const a = el.attrs;
     const parts = [`id="${el.id}"`];
+    const addTransform = () => {
+        if (Array.isArray(a.transform) && a.transform.length) {
+            parts.push(`transform="${escapeAttr(serializeTransform(a.transform))}"`);
+        }
+    };
     if (el.type === 'text') {
         for (const k of ['x','y','font-size','font-family','fill','fill-opacity','stroke','stroke-width','stroke-dasharray']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
+        addTransform();
         return `<text ${parts.join(' ')}>${escapeText(a.content ?? '')}</text>`;
     }
     if (el.type === 'path') {
@@ -1772,6 +1961,7 @@ function serializeElement(el) {
         for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
+        addTransform();
         return `<path ${parts.join(' ')} />`;
     }
     if (el.type === 'polyline' || el.type === 'polygon') {
@@ -1779,6 +1969,7 @@ function serializeElement(el) {
         for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
+        addTransform();
         return `<${el.type} ${parts.join(' ')} />`;
     }
     if (el.type === 'image') {
@@ -1786,13 +1977,15 @@ function serializeElement(el) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         if (a.href) parts.push(`href="${escapeAttr(a.href)}"`);
+        addTransform();
         return `<image ${parts.join(' ')} />`;
     }
     for (const [k, v] of Object.entries(a)) {
-        if (k === 'content') continue;
+        if (k === 'content' || k === 'transform') continue;
         if (v === undefined || v === null || v === '') continue;
         parts.push(`${k}="${escapeAttr(v)}"`);
     }
+    addTransform();
     return `<${el.type} ${parts.join(' ')} />`;
 }
 
@@ -1910,6 +2103,15 @@ function applySource() {
             if (!attrs.href && attrs['xlink:href']) attrs.href = attrs['xlink:href'];
             delete attrs['xlink:href'];
         }
+        if (typeof attrs.transform === 'string') {
+            try {
+                attrs.transform = parseTransform(attrs.transform);
+            } catch (e) {
+                showSourceStatus(`Invalid transform on <${type}>: ${e.message}`, true);
+                return;
+            }
+            if (!attrs.transform.length) delete attrs.transform;
+        }
         const defaults = TYPES[type].defaults();
         for (const k of Object.keys(defaults)) {
             if (attrs[k] === undefined) attrs[k] = defaults[k];
@@ -1926,6 +2128,7 @@ function applySource() {
     // segment/point row closures don't reference orphaned el objects.
     segmentsBuiltSig = null;
     polyPointsBuiltSig = null;
+    transformOpsBuiltSig = null;
     inspectorBuiltForId = null;
     showSourceStatus('Applied', false);
     render();
@@ -2191,6 +2394,9 @@ function cloneAttrs(attrs) {
     }
     if (Array.isArray(attrs.points)) {
         out.points = attrs.points.map(pt => pt.slice());
+    }
+    if (Array.isArray(attrs.transform)) {
+        out.transform = attrs.transform.map(op => ({ type: op.type, params: op.params.slice() }));
     }
     return out;
 }
