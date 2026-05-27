@@ -2900,6 +2900,245 @@ async function promptAttachImages() {
 
 document.getElementById('btn-attach-images').addEventListener('click', promptAttachImages);
 
+// ===== Session save / load =====
+const SESSION_SCHEMA = 1;
+const sessionPickerTypes = [{
+    description: 'SVG editor session',
+    accept: { 'application/json': ['.session.json', '.json'] },
+}];
+let lastSessionFilename = '';
+
+function pairSessionName(svgName) {
+    if (!svgName) return 'drawing.session.json';
+    const base = svgName.replace(/\.session\.json$/i, '').replace(/\.svg$/i, '');
+    return (base || 'drawing') + '.session.json';
+}
+function pairSvgName(sessionName) {
+    if (!sessionName) return 'drawing.svg';
+    const base = sessionName.replace(/\.session\.json$/i, '').replace(/\.svg$/i, '');
+    return (base || 'drawing') + '.svg';
+}
+
+// Build a JSON-friendly clone of one element (used for session payload).
+// Strips the in-session _displayHref blob URL since it cannot survive
+// serialization; arrays inside attrs (segments / points / transform) are
+// deep-copied so the saved payload doesn't share refs with state.
+function cleanElementForSession(el) {
+    const out = { id: el.id, type: el.type, attrs: { ...el.attrs } };
+    if (out.attrs._displayHref) delete out.attrs._displayHref;
+    if (Array.isArray(out.attrs.segments)) {
+        out.attrs.segments = out.attrs.segments.map(s => ({ cmd: s.cmd, params: s.params.slice() }));
+    }
+    if (Array.isArray(out.attrs.points)) {
+        out.attrs.points = out.attrs.points.map(pt => pt.slice());
+    }
+    if (Array.isArray(out.attrs.transform)) {
+        out.attrs.transform = out.attrs.transform.map(op => ({ type: op.type, params: op.params.slice() }));
+    }
+    return out;
+}
+
+function buildSessionPayload() {
+    return {
+        schema: SESSION_SCHEMA,
+        meta: {
+            savedAt: new Date().toISOString(),
+        },
+        editor: {
+            workingDir: state.workingDir,
+            precision: state.precision,
+            grid: { enabled: state.grid.enabled, spacing: state.grid.spacing },
+            canvas: { ...state.canvas },
+            lastImagePrefix: state.lastImagePrefix,
+        },
+        calc: {
+            expanded: state.calc.expanded,
+            precision: state.calc.precision,
+            blocks: state.calc.blocks.map(b => ({
+                id: b.id,
+                type: b.type,
+                label: b.label || '',
+                state: JSON.parse(JSON.stringify(b.state)),
+            })),
+        },
+        elements: state.elements.map(cleanElementForSession),
+    };
+}
+
+function restoreSession(payload) {
+    flushDebounce();
+    // Editor-level settings
+    const ed = payload.editor || {};
+    if (typeof ed.workingDir === 'string') {
+        state.workingDir = ed.workingDir;
+        const wdInput = document.getElementById('working-dir');
+        if (wdInput) wdInput.value = ed.workingDir;
+        try { localStorage.setItem('svgEditor.workingDir', ed.workingDir); } catch (_) {}
+    }
+    if (ed.precision != null) {
+        state.precision = ed.precision;
+        const sel = document.getElementById('precision-select');
+        if (sel) sel.value = String(ed.precision);
+    }
+    if (ed.grid) {
+        state.grid.enabled = !!ed.grid.enabled;
+        state.grid.spacing = ed.grid.spacing || state.grid.spacing;
+        const gt = document.getElementById('grid-toggle');
+        const gs = document.getElementById('grid-spacing');
+        const gv = document.getElementById('grid-spacing-val');
+        if (gt) gt.checked = state.grid.enabled;
+        if (gs) gs.value = String(state.grid.spacing);
+        if (gv) gv.textContent = String(state.grid.spacing);
+        applyGridVisibility();
+    }
+    if (ed.canvas) {
+        state.canvas = { x: ed.canvas.x || 0, y: ed.canvas.y || 0,
+                         width: ed.canvas.width || 800, height: ed.canvas.height || 600 };
+    }
+    if (typeof ed.lastImagePrefix === 'string') {
+        state.lastImagePrefix = ed.lastImagePrefix;
+    }
+    // Calculator panel
+    const cp = payload.calc || {};
+    state.calc.expanded = !!cp.expanded;
+    if (cp.precision != null) state.calc.precision = cp.precision;
+    state.calc.blocks = (cp.blocks || []).map(b => ({
+        id: b.id,
+        type: b.type,
+        label: b.label || '',
+        state: JSON.parse(JSON.stringify(b.state)),
+    }));
+    // Bump calc.nextId past any restored block IDs.
+    let maxCb = state.calc.nextId;
+    for (const b of state.calc.blocks) {
+        const m = /-(\d+)$/.exec(b.id);
+        if (m) maxCb = Math.max(maxCb, parseInt(m[1], 10) + 1);
+    }
+    state.calc.nextId = maxCb;
+    const calcPrecSel = document.getElementById('calc-precision');
+    if (calcPrecSel) calcPrecSel.value = String(state.calc.precision);
+    applyCalcVisibility();
+    renderCalcPanel();
+    // Elements + nextId
+    state.elements = (payload.elements || []).map(el => ({
+        id: el.id,
+        type: el.type,
+        attrs: JSON.parse(JSON.stringify(el.attrs || {})),
+    }));
+    let maxId = 1;
+    for (const el of state.elements) {
+        const m = /-(\d+)$/.exec(el.id);
+        if (m) maxId = Math.max(maxId, parseInt(m[1], 10) + 1);
+    }
+    state.nextId = maxId;
+    state.selectedId = null;
+    state.selectedSegmentIdx = null;
+    // Force inspector lists to rebuild with fresh closures.
+    segmentsBuiltSig = null;
+    polyPointsBuiltSig = null;
+    transformOpsBuiltSig = null;
+    inspectorBuiltForId = null;
+    applyCanvasViewBox();
+    render();
+    pushHistory();
+}
+
+async function saveSessionToFile() {
+    const payload = buildSessionPayload();
+    const text = JSON.stringify(payload, null, 2);
+    const baseName = lastSessionFilename || pairSessionName(lastFilename);
+    const suggested = baseName.includes('/') ? baseName : (workingDirPrefix() + baseName);
+
+    if (window.showSaveFilePicker) {
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: suggested,
+                types: sessionPickerTypes,
+            });
+            const writable = await handle.createWritable();
+            await writable.write(text);
+            await writable.close();
+            lastSessionFilename = handle.name;
+            lastFilename = pairSvgName(handle.name);
+            showSourceStatus(`Saved session ${handle.name}`, false);
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                showSourceStatus(`Save session failed: ${err.message || err.name}`, true);
+            }
+        }
+        return;
+    }
+    const input = prompt('Save session as (filename):', suggested);
+    if (input === null) return;
+    const name = input.trim() || 'drawing.session.json';
+    lastSessionFilename = name.split('/').pop() || name;
+    lastFilename = pairSvgName(lastSessionFilename);
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showSourceStatus(`Saved session ${name}`, false);
+}
+
+async function openSessionFromFile() {
+    let file = null;
+    if (window.showOpenFilePicker) {
+        try {
+            const [handle] = await window.showOpenFilePicker({
+                types: sessionPickerTypes,
+                multiple: false,
+            });
+            file = await handle.getFile();
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                showSourceStatus(`Open session failed: ${err.message || err.name}`, true);
+            }
+            return;
+        }
+    } else {
+        file = await new Promise(resolve => {
+            const inp = document.createElement('input');
+            inp.type = 'file';
+            inp.accept = '.session.json,.json,application/json';
+            inp.addEventListener('change', () => resolve(inp.files?.[0] || null));
+            inp.click();
+        });
+    }
+    if (!file) return;
+    let text;
+    try { text = await file.text(); }
+    catch (err) {
+        showSourceStatus(`Read failed: ${err.message}`, true);
+        return;
+    }
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch (err) {
+        showSourceStatus(`Session JSON parse error: ${err.message}`, true);
+        return;
+    }
+    if (!payload || typeof payload !== 'object') {
+        showSourceStatus('Not a session file', true);
+        return;
+    }
+    if (payload.schema !== SESSION_SCHEMA) {
+        showSourceStatus(`Unsupported session schema: ${payload.schema}`, true);
+        return;
+    }
+    restoreSession(payload);
+    lastSessionFilename = file.name;
+    lastFilename = pairSvgName(file.name);
+    showSourceStatus(`Opened session ${file.name}`, false);
+}
+
+document.getElementById('btn-save-session').addEventListener('click', saveSessionToFile);
+document.getElementById('btn-open-session').addEventListener('click', openSessionFromFile);
+
 function applyImagePreserveAspectRatio() {
     const el = findElement(state.selectedId);
     if (!el || el.type !== 'image') return;
