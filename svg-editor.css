@@ -291,6 +291,8 @@ input[type="color"] {
 }
 input[type="range"] { width: 100%; padding: 0; }
 input[readonly] { color: var(--muted); }
+input.invalid { border-color: var(--danger); }
+input.invalid:focus { outline-color: var(--danger); }
 
 button {
     cursor: pointer;

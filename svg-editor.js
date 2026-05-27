@@ -1094,7 +1094,11 @@ function updateInspector() {
     }
     inspectorEmpty.hidden = true;
     inspectorBody.hidden = false;
-    document.getElementById('i-id').value = el.id;
+    const idInput = document.getElementById('i-id');
+    if (document.activeElement !== idInput) {
+        idInput.value = el.id;
+        idInput.classList.remove('invalid');
+    }
     document.getElementById('i-type').value = el.type;
 
     document.getElementById('geom-group').hidden = (TYPES[el.type].geomFields || []).length === 0;
@@ -1526,6 +1530,71 @@ document.getElementById('path-add-segment').addEventListener('click', () => {
     render();
     pushHistory();
 });
+
+function validateIdValue(proposed, currentId) {
+    if (!proposed) return { ok: false, reason: 'ID cannot be empty' };
+    if (/\s/.test(proposed)) return { ok: false, reason: 'ID cannot contain whitespace' };
+    if (proposed === currentId) return { ok: true };
+    if (state.elements.some(el => el.id === proposed)) {
+        return { ok: false, reason: `ID "${proposed}" is already used` };
+    }
+    return { ok: true };
+}
+
+function wireIdInput() {
+    const idInput = document.getElementById('i-id');
+
+    idInput.addEventListener('input', () => {
+        const el = findElement(state.selectedId);
+        if (!el) return;
+        const r = validateIdValue(idInput.value, el.id);
+        idInput.classList.toggle('invalid', !r.ok);
+        idInput.title = r.ok
+            ? 'Identifier; must be unique and contain no whitespace'
+            : r.reason;
+    });
+
+    idInput.addEventListener('blur', () => commitIdInput());
+
+    idInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            idInput.blur();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            const el = findElement(state.selectedId);
+            if (el) idInput.value = el.id;
+            idInput.classList.remove('invalid');
+            idInput.blur();
+        }
+    });
+}
+
+function commitIdInput() {
+    const idInput = document.getElementById('i-id');
+    const el = findElement(state.selectedId);
+    if (!el) return;
+    const proposed = idInput.value;
+    if (proposed === el.id) {
+        idInput.classList.remove('invalid');
+        return;
+    }
+    const r = validateIdValue(proposed, el.id);
+    if (!r.ok) {
+        // Revert silently — don't interrupt anything else the user is doing.
+        idInput.value = el.id;
+        idInput.classList.remove('invalid');
+        idInput.title = 'Identifier; must be unique and contain no whitespace';
+        return;
+    }
+    flushDebounce();
+    const oldId = el.id;
+    el.id = proposed;
+    if (state.selectedId === oldId) state.selectedId = proposed;
+    idInput.classList.remove('invalid');
+    render();
+    pushHistory();
+}
 
 function wireInspector() {
     const setAttr = (key, val) => {
@@ -2489,6 +2558,7 @@ document.getElementById('canvas-preset').addEventListener('change', (e) => {
 
 // ===== Init =====
 wireInspector();
+wireIdInput();
 
 // Sync state with form values the browser may have restored across reloads.
 state.grid.enabled = gridToggle.checked;
