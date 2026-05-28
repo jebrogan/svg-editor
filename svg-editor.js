@@ -3116,6 +3116,13 @@ document.addEventListener('keydown', (e) => {
         else            zMoveSelected(isForward ? 'forward' : 'backward');
         return;
     }
+    // Ctrl+G groups the current selection; Ctrl+Shift+G ungroups.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault();
+        if (e.shiftKey) ungroupSelected();
+        else            groupSelected();
+        return;
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') {
         deleteSelected();
         e.preventDefault();
@@ -3224,6 +3231,90 @@ document.getElementById('btn-snap-precision').addEventListener('click', snapSele
 document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);
 
+// Wrap the current selection in a fresh <g>. Step F only supports
+// same-parent grouping — if the selection spans multiple parents the
+// action is a no-op (with a status message). The new <g> takes the
+// z-position of the topmost selected sibling, so the visual stack is
+// preserved. After grouping the new <g> becomes the sole selection.
+function groupSelected() {
+    if (state.selectedIds.size === 0) {
+        showSourceStatus('Group: nothing selected', true);
+        return;
+    }
+    const infos = [];
+    let sharedSiblings = null;
+    for (const id of state.selectedIds) {
+        const info = findElementInfo(id);
+        if (!info) continue;
+        if (sharedSiblings === null) sharedSiblings = info.siblings;
+        else if (info.siblings !== sharedSiblings) {
+            showSourceStatus('Group: selection must share a parent', true);
+            return;
+        }
+        infos.push(info);
+    }
+    if (infos.length === 0) return;
+    flushDebounce();
+    infos.sort((a, b) => a.idx - b.idx);
+    const orderedEls = infos.map(i => i.el);
+    const highestIdx = infos[infos.length - 1].idx;
+    // Remove highest-index-first so earlier removals don't shift later
+    // indices.
+    for (let i = infos.length - 1; i >= 0; i--) {
+        sharedSiblings.splice(infos[i].idx, 1);
+    }
+    // The topmost member sat at highestIdx; after removing the (n-1)
+    // preceding selected siblings, that position is now
+    // highestIdx - (n-1). Inserting the new <g> there keeps the
+    // group's z-spot equal to the original topmost member's spot.
+    const insertIdx = highestIdx - (infos.length - 1);
+    const group = {
+        id: nextId('g'),
+        type: 'g',
+        attrs: {},
+        children: orderedEls,
+    };
+    sharedSiblings.splice(insertIdx, 0, group);
+    selectElement(group.id);
+    render();
+    pushHistory();
+}
+
+// Lift the children of every <g> in the current selection up to the
+// group's parent (replacing the group in its siblings list). Group
+// transform is dropped (per the user's step-F decision): children
+// visibly snap if the group had a non-identity transform. After
+// ungrouping, the lifted children become the new selection so the
+// user can immediately re-group / continue editing.
+function ungroupSelected() {
+    if (state.selectedIds.size === 0) {
+        showSourceStatus('Ungroup: nothing selected', true);
+        return;
+    }
+    const groupIds = [];
+    for (const id of state.selectedIds) {
+        const el = findElement(id);
+        if (el && el.type === 'g') groupIds.push(id);
+    }
+    if (groupIds.length === 0) {
+        showSourceStatus('Ungroup: no <g> selected', true);
+        return;
+    }
+    flushDebounce();
+    const newSelectionIds = [];
+    for (const gid of groupIds) {
+        const info = findElementInfo(gid);
+        if (!info) continue;
+        const { el: g, siblings, idx } = info;
+        const kids = g.children || [];
+        siblings.splice(idx, 1, ...kids);
+        for (const k of kids) newSelectionIds.push(k.id);
+    }
+    selectMany(newSelectionIds);
+    render();
+    pushHistory();
+}
+
 function zMoveSelected(direction) {
     if (!state.selectedId) return;
     const info = findElementInfo(state.selectedId);
@@ -3247,6 +3338,8 @@ document.getElementById('btn-z-front').addEventListener('click',    () => zMoveS
 document.getElementById('btn-z-forward').addEventListener('click',  () => zMoveSelected('forward'));
 document.getElementById('btn-z-backward').addEventListener('click', () => zMoveSelected('backward'));
 document.getElementById('btn-z-back').addEventListener('click',     () => zMoveSelected('back'));
+document.getElementById('btn-group').addEventListener('click',      groupSelected);
+document.getElementById('btn-ungroup').addEventListener('click',    ungroupSelected);
 applyBtn.addEventListener('click', applySource);
 sourceEl.addEventListener('input', () => {
     applyBtn.disabled = sourceEl.value === canonicalSource;
