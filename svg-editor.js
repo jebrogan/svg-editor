@@ -2515,6 +2515,7 @@ function selectElement(id) {
     state.selectedId = id;
     renderHandles();
     updateInspector();
+    renderOutline();
 }
 
 // ===== Add element =====
