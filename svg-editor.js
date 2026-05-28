@@ -698,6 +698,7 @@ function restoreSnapshot(snap) {
     // Compatibility: older snapshots were just an array of elements.
     const elements = Array.isArray(snap) ? snap : (snap.elements || []);
     state.elements = JSON.parse(JSON.stringify(elements));
+    normalizeElementTree(state.elements);
     if (!Array.isArray(snap) && snap.canvas) {
         state.canvas = { ...snap.canvas };
         applyCanvasViewBox();
@@ -811,8 +812,72 @@ function nextId(type) {
     return `${type}-${state.nextId++}`;
 }
 
-function findElement(id) {
-    return state.elements.find(e => e.id === id);
+// Recursive tree search. state.elements is the top-level children list of
+// the implicit content root; every element may itself have children.
+function findElement(id, siblings) {
+    const list = siblings || state.elements;
+    for (const el of list) {
+        if (el.id === id) return el;
+        if (el.children && el.children.length) {
+            const found = findElement(id, el.children);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+// Find an element along with its containing siblings list and its index
+// within that list. Returns null when not found, otherwise
+// { el, siblings, idx, parent } where parent is the parent element or
+// null when el sits at the top level.
+function findElementInfo(id, parent, siblings) {
+    const list = siblings || state.elements;
+    for (let i = 0; i < list.length; i++) {
+        const el = list[i];
+        if (el.id === id) return { el, parent: parent || null, siblings: list, idx: i };
+        if (el.children && el.children.length) {
+            const found = findElementInfo(id, el, el.children);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+// Visit every element in document order. Visitor receives (el, parent).
+function walkTree(fn, parent, siblings) {
+    const list = siblings || state.elements;
+    for (const el of list) {
+        fn(el, parent || null);
+        if (el.children && el.children.length) walkTree(fn, el, el.children);
+    }
+}
+
+// Deep-clone an element including its children. attrs are deep-cloned via
+// cloneAttrs (which already handles segments / points / transform arrays).
+function deepCloneElement(el) {
+    return {
+        id: el.id,
+        type: el.type,
+        attrs: cloneAttrs(el.attrs),
+        children: (el.children || []).map(deepCloneElement),
+    };
+}
+
+// Walk a cloned subtree assigning fresh ids so the clone doesn't collide
+// with existing elements. Caller is responsible for any selectedId update.
+function regenerateElementIds(el) {
+    el.id = nextId(el.type);
+    for (const child of (el.children || [])) regenerateElementIds(child);
+}
+
+// Ensure every element in a tree has a children array (defaults to []).
+// Useful when loading older session payloads / svg sources that predate
+// the tree-ify change.
+function normalizeElementTree(list) {
+    for (const el of list) {
+        if (!Array.isArray(el.children)) el.children = [];
+        if (el.children.length) normalizeElementTree(el.children);
+    }
 }
 
 function toHex(color) {
@@ -904,10 +969,20 @@ function applyTransformAttr(node, a) {
 }
 
 // ===== Rendering =====
+function createSvgNodeRecursive(el) {
+    const node = createSvgNode(el);
+    if (el.children && el.children.length) {
+        for (const child of el.children) {
+            node.appendChild(createSvgNodeRecursive(child));
+        }
+    }
+    return node;
+}
+
 function render() {
     while (content.firstChild) content.removeChild(content.firstChild);
     for (const el of state.elements) {
-        content.appendChild(createSvgNode(el));
+        content.appendChild(createSvgNodeRecursive(el));
     }
     renderGrid();
     renderHandles();
@@ -2187,7 +2262,7 @@ function applySource() {
         const id = child.getAttribute('id') || nextId(type);
         const m = id.match(/-(\d+)$/);
         if (m) maxId = Math.max(maxId, parseInt(m[1], 10) + 1);
-        newElements.push({ id, type, attrs });
+        newElements.push({ id, type, attrs, children: [] });
     }
     state.elements = newElements;
     state.nextId = maxId;
@@ -2343,7 +2418,7 @@ function selectElement(id) {
 function addElement(type, p) {
     const def = TYPES[type];
     const attrs = { ...def.defaults(), ...def.atPoint(p) };
-    const el = { id: nextId(type), type, attrs };
+    const el = { id: nextId(type), type, attrs, children: [] };
     state.elements.push(el);
     state.selectedId = el.id;
     return el;
@@ -2588,9 +2663,10 @@ document.addEventListener('keydown', (e) => {
 
 function deleteSelected() {
     if (!state.selectedId) return;
+    const info = findElementInfo(state.selectedId);
+    if (!info) return;
     flushDebounce();
-    const idx = state.elements.findIndex(el => el.id === state.selectedId);
-    if (idx >= 0) state.elements.splice(idx, 1);
+    info.siblings.splice(info.idx, 1);
     state.selectedId = null;
     render();
     pushHistory();
@@ -2609,15 +2685,16 @@ document.getElementById('btn-clear').addEventListener('click', () => {
 
 function duplicateSelected() {
     if (!state.selectedId) return;
-    const el = findElement(state.selectedId);
-    if (!el) return;
+    const info = findElementInfo(state.selectedId);
+    if (!info) return;
     flushDebounce();
-    const newAttrs = cloneAttrs(el.attrs);
-    const def = TYPES[el.type];
-    if (def.translate) def.translate(newAttrs, 10, 10);
-    const newEl = { id: nextId(el.type), type: el.type, attrs: newAttrs };
-    state.elements.push(newEl);
-    state.selectedId = newEl.id;
+    const clone = deepCloneElement(info.el);
+    regenerateElementIds(clone);
+    const def = TYPES[clone.type];
+    if (def && def.translate) def.translate(clone.attrs, 10, 10);
+    // Insert the clone immediately after the original, in the same siblings list.
+    info.siblings.splice(info.idx + 1, 0, clone);
+    state.selectedId = clone.id;
     state.selectedSegmentIdx = null;
     render();
     pushHistory();
@@ -2666,18 +2743,19 @@ document.getElementById('btn-redo').addEventListener('click', redo);
 
 function zMoveSelected(direction) {
     if (!state.selectedId) return;
-    const idx = state.elements.findIndex(el => el.id === state.selectedId);
-    if (idx < 0) return;
+    const info = findElementInfo(state.selectedId);
+    if (!info) return;
+    const { siblings, idx } = info;
     let newIdx;
-    if (direction === 'front')         newIdx = state.elements.length - 1;
+    if (direction === 'front')         newIdx = siblings.length - 1;
     else if (direction === 'back')     newIdx = 0;
-    else if (direction === 'forward')  newIdx = Math.min(idx + 1, state.elements.length - 1);
+    else if (direction === 'forward')  newIdx = Math.min(idx + 1, siblings.length - 1);
     else if (direction === 'backward') newIdx = Math.max(idx - 1, 0);
     else return;
     if (newIdx === idx) return;
     flushDebounce();
-    const [el] = state.elements.splice(idx, 1);
-    state.elements.splice(newIdx, 0, el);
+    const [el] = siblings.splice(idx, 1);
+    siblings.splice(newIdx, 0, el);
     render();
     pushHistory();
 }
@@ -2935,6 +3013,11 @@ function cleanElementForSession(el) {
     if (Array.isArray(out.attrs.transform)) {
         out.attrs.transform = out.attrs.transform.map(op => ({ type: op.type, params: op.params.slice() }));
     }
+    if (el.children && el.children.length) {
+        out.children = el.children.map(cleanElementForSession);
+    } else {
+        out.children = [];
+    }
     return out;
 }
 
@@ -3019,17 +3102,24 @@ function restoreSession(payload) {
     if (calcPrecSel) calcPrecSel.value = String(state.calc.precision);
     applyCalcVisibility();
     renderCalcPanel();
-    // Elements + nextId
-    state.elements = (payload.elements || []).map(el => ({
-        id: el.id,
-        type: el.type,
-        attrs: JSON.parse(JSON.stringify(el.attrs || {})),
-    }));
+    // Elements + nextId. Sessions written before the tree-ify change won't
+    // have a children field on each element; normalizeElementTree adds an
+    // empty array. Tree-aware sessions deep-clone children too.
+    function cloneElForRestore(el) {
+        return {
+            id: el.id,
+            type: el.type,
+            attrs: JSON.parse(JSON.stringify(el.attrs || {})),
+            children: (el.children || []).map(cloneElForRestore),
+        };
+    }
+    state.elements = (payload.elements || []).map(cloneElForRestore);
+    normalizeElementTree(state.elements);
     let maxId = 1;
-    for (const el of state.elements) {
+    walkTree((el) => {
         const m = /-(\d+)$/.exec(el.id);
         if (m) maxId = Math.max(maxId, parseInt(m[1], 10) + 1);
-    }
+    });
     state.nextId = maxId;
     state.selectedId = null;
     state.selectedSegmentIdx = null;
