@@ -3884,6 +3884,7 @@ attachPanelResize('#calc-panel .panel-resize-handle',   'calc',   '--calc-height
 // Wire calculator UI
 document.getElementById('calc-toggle').addEventListener('click', () => {
     state.calc.expanded = !state.calc.expanded;
+    try { localStorage.setItem('svgEditor.calcExpanded', state.calc.expanded ? '1' : '0'); } catch (_) {}
     applyCalcVisibility();
 });
 document.getElementById('calc-add-block').addEventListener('click', () => {
@@ -3925,6 +3926,8 @@ try {
     if (Number.isFinite(sh) && sh >= 60 && sh <= 800) state.source.height = sh;
     const ch = parseInt(localStorage.getItem('svgEditor.calcHeight') || '', 10);
     if (Number.isFinite(ch) && ch >= 60 && ch <= 800) state.calc.height = ch;
+    const calcExp = localStorage.getItem('svgEditor.calcExpanded');
+    if (calcExp === '1') state.calc.expanded = true;
 } catch (_) {}
 {
     const app = document.getElementById('app');
@@ -3932,6 +3935,7 @@ try {
     app.style.setProperty('--calc-height', state.calc.height + 'px');
 }
 applyOutlineVisibility();
+if (state.calc.expanded) applyCalcVisibility();
 
 // ===== Init =====
 wireInspector();
