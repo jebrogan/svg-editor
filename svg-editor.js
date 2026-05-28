@@ -19,6 +19,7 @@ const state = {
     elements: [],
     selectedId: null,
     selectedSegmentIdx: null, // index into path.attrs.segments when a path is selected
+    selectionAscentRoot: null, // element id where the current Alt+click ascent started; wrap target at the top
     nextId: 1,
     precision: 1, // 0..4 (decimal places) or 'free'
     grid: { enabled: false, spacing: 20 },
@@ -2510,9 +2511,15 @@ palette.addEventListener('click', (e) => {
 });
 
 // ===== Selection =====
-function selectElement(id) {
+function selectElement(id, opts) {
     if (state.selectedId !== id) state.selectedSegmentIdx = null;
     state.selectedId = id;
+    // Any non-ascent selection ends the current ascent chain; the next
+    // Alt+click will capture wherever the user is now as the new wrap
+    // target. Calls coming from ascendSelectionOrWrap pass viaAscent.
+    if (!opts || !opts.viaAscent) {
+        state.selectionAscentRoot = null;
+    }
     renderHandles();
     updateInspector();
     renderOutline();
@@ -2532,21 +2539,29 @@ function addElement(type, p) {
 let drag = null;
 
 // Move the selection one level up the tree. When already at the top
-// level, wrap to a leaf within the current subtree (first descendant in
-// depth-first order). If nothing is selected, this is a no-op — the user
-// is expected to start with a normal click.
+// level, wrap to the leaf the ascent chain started from (captured on
+// the first Alt+click of a chain in state.selectionAscentRoot). Any
+// non-ascent selection clears that capture so the next chain starts
+// from the new selection.
 function ascendSelectionOrWrap() {
     if (!state.selectedId) return;
     const info = findElementInfo(state.selectedId);
     if (!info) return;
+    // First Alt+click of a chain: remember where we came from so we
+    // can return to that exact leaf on wrap, not the DFS-first one.
+    if (!state.selectionAscentRoot) {
+        state.selectionAscentRoot = state.selectedId;
+    }
     if (info.parent) {
-        selectElement(info.parent.id);
+        selectElement(info.parent.id, { viaAscent: true });
         return;
     }
-    // At top level: wrap to the first leaf in this element's subtree.
-    let cur = info.el;
-    while (cur.children && cur.children.length > 0) cur = cur.children[0];
-    if (cur && cur !== info.el) selectElement(cur.id);
+    // At the top: wrap to the originally selected leaf (if it still exists
+    // and isn't already the current selection).
+    const target = state.selectionAscentRoot;
+    if (target && target !== state.selectedId && findElement(target)) {
+        selectElement(target, { viaAscent: true });
+    }
 }
 
 canvas.addEventListener('pointerdown', (e) => {
