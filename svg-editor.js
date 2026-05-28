@@ -27,6 +27,11 @@ const state = {
     canvasLockedAspect: null,
     lastImagePrefix: 'image/', // sticky default for new <image> href prefixes
     workingDir: 'projects',    // path prefix suggested for Save/Open filenames
+    outline: {
+        expanded: false,
+        width: 240,             // panel width when expanded, in px
+        collapsedNodes: new Set(),  // element ids that are collapsed; default everything expanded
+    },
     calc: {
         expanded: false,
         precision: 3,         // independent of state.precision; 'free' allowed
@@ -1055,6 +1060,7 @@ function render() {
     updateSource();
     updateToolUI();
     updateMissingImagesStatus();
+    renderOutline();
 }
 
 function getViewBox() {
@@ -3687,6 +3693,146 @@ function sendSelectionToCalc() {
     }
 }
 
+// ===== Outline panel =====
+let outlineBuiltSig = null;
+
+function outlineStructureSig() {
+    // Identifies the *visible* row set (id, depth, and whether each row is
+    // a leaf or collapsed/expanded). Doesn't include attrs, so attribute
+    // edits during a drag don't trigger an outline DOM rebuild.
+    const parts = [];
+    function walk(el, depth) {
+        parts.push(el.id, depth);
+        const hasChildren = !!(el.children && el.children.length);
+        parts.push(hasChildren ? 1 : 0);
+        if (!hasChildren) return;
+        if (state.outline.collapsedNodes.has(el.id)) {
+            parts.push('c'); // collapsed
+            return;
+        }
+        for (const child of el.children) walk(child, depth + 1);
+    }
+    for (const el of state.elements) walk(el, 0);
+    return parts.join('|');
+}
+
+function buildOutlineDOM() {
+    const container = document.getElementById('outline-tree');
+    if (!container) return;
+    container.innerHTML = '';
+    function appendRow(el, depth) {
+        const row = document.createElement('div');
+        row.className = 'outline-row';
+        row.dataset.elementId = el.id;
+        row.style.paddingLeft = (6 + depth * 14) + 'px';
+
+        const hasChildren = !!(el.children && el.children.length);
+        const tri = document.createElement('span');
+        tri.className = 'outline-triangle' + (hasChildren ? '' : ' empty');
+        if (hasChildren) {
+            const collapsed = state.outline.collapsedNodes.has(el.id);
+            tri.textContent = collapsed ? '▸' : '▾';
+            tri.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                if (state.outline.collapsedNodes.has(el.id)) {
+                    state.outline.collapsedNodes.delete(el.id);
+                } else {
+                    state.outline.collapsedNodes.add(el.id);
+                }
+                outlineBuiltSig = null;
+                renderOutline();
+            });
+        } else {
+            tri.textContent = '·';
+        }
+        row.appendChild(tri);
+
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'outline-type';
+        typeSpan.textContent = el.type;
+        row.appendChild(typeSpan);
+
+        const idSpan = document.createElement('span');
+        idSpan.className = 'outline-id';
+        idSpan.textContent = el.id;
+        row.appendChild(idSpan);
+
+        row.addEventListener('click', () => selectElement(el.id));
+
+        container.appendChild(row);
+
+        if (hasChildren && !state.outline.collapsedNodes.has(el.id)) {
+            for (const child of el.children) appendRow(child, depth + 1);
+        }
+    }
+    for (const el of state.elements) appendRow(el, 0);
+}
+
+function renderOutline() {
+    if (!state.outline.expanded) return;
+    const sig = outlineStructureSig();
+    if (sig !== outlineBuiltSig) {
+        buildOutlineDOM();
+        outlineBuiltSig = sig;
+    }
+    // Always refresh selection highlight (cheap; runs every render()).
+    const container = document.getElementById('outline-tree');
+    if (!container) return;
+    for (const row of container.querySelectorAll('.outline-row')) {
+        row.classList.toggle('selected', row.dataset.elementId === state.selectedId);
+    }
+}
+
+function applyOutlineVisibility() {
+    const app = document.getElementById('app');
+    app.classList.toggle('outline-on', state.outline.expanded);
+    app.style.setProperty('--outline-width', state.outline.width + 'px');
+    const btn = document.getElementById('outline-toggle');
+    if (btn) btn.textContent = state.outline.expanded ? 'Hide outline' : 'Show outline';
+    if (state.outline.expanded) {
+        outlineBuiltSig = null;
+        renderOutline();
+    }
+    // Canvas dimensions changed; refresh rulers if needed.
+    if (state.grid.enabled) requestAnimationFrame(renderHtmlRulers);
+}
+
+document.getElementById('outline-toggle').addEventListener('click', () => {
+    state.outline.expanded = !state.outline.expanded;
+    try { localStorage.setItem('svgEditor.outlineExpanded', state.outline.expanded ? '1' : '0'); } catch (_) {}
+    applyOutlineVisibility();
+});
+
+// Outline panel resize handle (drag the right edge to grow/shrink).
+(() => {
+    const handle = document.querySelector('#outline-panel .outline-resize-handle');
+    if (!handle) return;
+    let dragging = false;
+    let paletteRight = 0;
+    handle.addEventListener('pointerdown', (e) => {
+        if (!state.outline.expanded) return;
+        dragging = true;
+        const palette = document.getElementById('palette');
+        const rect = palette.getBoundingClientRect();
+        paletteRight = rect.right;
+        handle.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+    handle.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const w = Math.max(120, Math.min(600, e.clientX - paletteRight));
+        state.outline.width = w;
+        document.getElementById('app').style.setProperty('--outline-width', w + 'px');
+    });
+    handle.addEventListener('pointerup', (e) => {
+        if (!dragging) return;
+        dragging = false;
+        try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+        try { localStorage.setItem('svgEditor.outlineWidth', String(state.outline.width)); } catch (_) {}
+        if (state.grid.enabled) requestAnimationFrame(renderHtmlRulers);
+    });
+})();
+
 // Wire calculator UI
 document.getElementById('calc-toggle').addEventListener('click', () => {
     state.calc.expanded = !state.calc.expanded;
@@ -3720,6 +3866,15 @@ workingDirInput.addEventListener('input', () => {
     state.workingDir = workingDirInput.value;
     try { localStorage.setItem('svgEditor.workingDir', state.workingDir); } catch (_) {}
 });
+
+// Restore outline panel preferences from localStorage.
+try {
+    const w = parseInt(localStorage.getItem('svgEditor.outlineWidth') || '', 10);
+    if (Number.isFinite(w) && w >= 120 && w <= 600) state.outline.width = w;
+    const exp = localStorage.getItem('svgEditor.outlineExpanded');
+    if (exp === '1') state.outline.expanded = true;
+} catch (_) {}
+applyOutlineVisibility();
 
 // ===== Init =====
 wireInspector();

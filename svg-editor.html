@@ -79,10 +79,20 @@
             <button class="tool-btn" id="btn-z-forward" title="Bring forward one step (Ctrl+])">Forward</button>
             <button class="tool-btn" id="btn-z-backward" title="Send backward one step (Ctrl+[)">Backward</button>
             <button class="tool-btn" id="btn-z-back" title="Send to back (Ctrl+Shift+[)">To back</button>
+            <div class="section-label">Outline</div>
+            <button class="tool-btn" id="outline-toggle" title="Show / hide the outline (element tree) panel">Show outline</button>
             <div class="section-label">Calculator</div>
             <button class="tool-btn" id="calc-toggle" title="Show / hide the calculator panel">Show calc</button>
             <div class="section-label">Working dir</div>
             <input id="working-dir" type="text" placeholder="projects" title="Subdirectory used as a path prefix when suggesting filenames for Save and Open">
+        </aside>
+
+        <aside id="outline-panel">
+            <div class="outline-header">
+                <span class="section-label">Outline</span>
+            </div>
+            <div id="outline-tree"></div>
+            <div class="outline-resize-handle" title="Drag to resize the outline panel"></div>
         </aside>
 
         <main id="canvas-wrap">

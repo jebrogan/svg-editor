@@ -25,24 +25,26 @@ html, body {
 }
 
 #app {
+    --outline-width: 0px;
     display: grid;
     height: 100vh;
-    grid-template-columns: 180px 1fr 280px;
+    grid-template-columns: 180px var(--outline-width) 1fr 280px;
     grid-template-rows: 40px 1fr 200px;
     grid-template-areas:
-        "top      top      top"
-        "palette  canvas   inspector"
-        "palette  source   inspector";
+        "top      top      top      top"
+        "palette  outline  canvas   inspector"
+        "palette  outline  source   inspector";
     gap: 1px;
     background: var(--border);
 }
+#app.outline-on { --outline-width: 240px; }
 #app.calc-on {
     grid-template-rows: 40px 1fr 240px 200px;
     grid-template-areas:
-        "top      top      top"
-        "palette  canvas   inspector"
-        "palette  calc     inspector"
-        "palette  source   inspector";
+        "top      top      top      top"
+        "palette  outline  canvas   inspector"
+        "palette  outline  calc     inspector"
+        "palette  outline  source   inspector";
 }
 
 #topbar {
@@ -242,6 +244,67 @@ button:disabled:hover { background: var(--panel-2); }
     min-height: 0;
 }
 #app.calc-on #calc-panel { display: flex; }
+
+#outline-panel {
+    grid-area: outline;
+    background: var(--panel);
+    display: none;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+}
+#app.outline-on #outline-panel { display: flex; }
+.outline-header {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+#outline-tree {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 4px 0;
+}
+.outline-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -2px;
+    bottom: 0;
+    width: 5px;
+    cursor: ew-resize;
+    z-index: 3;
+}
+.outline-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px 2px 0;
+    cursor: pointer;
+    font-size: 12px;
+    user-select: none;
+    white-space: nowrap;
+}
+.outline-row:hover { background: rgba(255, 255, 255, 0.04); }
+.outline-row.selected { background: rgba(79, 157, 255, 0.22); }
+.outline-row .outline-triangle {
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 10px;
+}
+.outline-row .outline-triangle.empty { visibility: hidden; }
+.outline-row .outline-type {
+    flex-shrink: 0;
+    color: var(--muted);
+    font-size: 11px;
+    min-width: 38px;
+}
+.outline-row .outline-id {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .calc-header {
     display: flex;
     align-items: center;
