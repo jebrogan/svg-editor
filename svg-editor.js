@@ -2530,7 +2530,33 @@ function addElement(type, p) {
 // ===== Pointer interaction =====
 let drag = null;
 
+// Move the selection one level up the tree. When already at the top
+// level, wrap to a leaf within the current subtree (first descendant in
+// depth-first order). If nothing is selected, this is a no-op — the user
+// is expected to start with a normal click.
+function ascendSelectionOrWrap() {
+    if (!state.selectedId) return;
+    const info = findElementInfo(state.selectedId);
+    if (!info) return;
+    if (info.parent) {
+        selectElement(info.parent.id);
+        return;
+    }
+    // At top level: wrap to the first leaf in this element's subtree.
+    let cur = info.el;
+    while (cur.children && cur.children.length > 0) cur = cur.children[0];
+    if (cur && cur !== info.el) selectElement(cur.id);
+}
+
 canvas.addEventListener('pointerdown', (e) => {
+    // Alt+click on the canvas ascends the current selection one level
+    // (wraps to leaf at the top). Ignores what was clicked — the click
+    // is just the trigger; the action operates on state.selectedId.
+    if (e.altKey && state.tool === 'select') {
+        ascendSelectionOrWrap();
+        e.preventDefault();
+        return;
+    }
     flushDebounce();
     const p = svgPoint(e.clientX, e.clientY);
 
