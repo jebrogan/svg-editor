@@ -17,8 +17,9 @@ const toolNameEl = document.getElementById('tool-name');
 const state = {
     tool: 'select',
     elements: [],
-    selectedId: null,
-    selectedSegmentIdx: null, // index into path.attrs.segments when a path is selected
+    selectedId: null,          // primary selection: drives inspector, Alt+click root, etc.
+    selectedIds: new Set(),    // all currently-selected element ids; selectedId is the most-recent member
+    selectedSegmentIdx: null,  // index into path.attrs.segments when a path is selected
     selectionAscentRoot: null, // element id where the current Alt+click ascent started; wrap target at the top
     nextId: 1,
     precision: 1, // 0..4 (decimal places) or 'free'
@@ -771,11 +772,10 @@ function restoreSnapshot(snap) {
         state.canvas = { ...snap.canvas };
         applyCanvasViewBox();
     }
-    // Validate selection
-    if (state.selectedId && !findElement(state.selectedId)) {
-        state.selectedId = null;
-        state.selectedSegmentIdx = null;
-    } else if (state.selectedId) {
+    // Validate selection. Drop any ids that no longer exist after the
+    // snapshot restore — handles both the primary and multi-select members.
+    pruneSelectionToExisting();
+    if (state.selectedId) {
         const el = findElement(state.selectedId);
         if (!el || el.type !== 'path') {
             state.selectedSegmentIdx = null;
@@ -783,6 +783,8 @@ function restoreSnapshot(snap) {
                    !(el.attrs.segments && el.attrs.segments[state.selectedSegmentIdx])) {
             state.selectedSegmentIdx = null;
         }
+    } else {
+        state.selectedSegmentIdx = null;
     }
     segmentsBuiltSig = null;
     polyPointsBuiltSig = null;
@@ -1176,8 +1178,17 @@ function bboxAnchor(dir, bb) {
 function renderHandles() {
     while (handlesLayer.firstChild) handlesLayer.removeChild(handlesLayer.firstChild);
     if (!state.selectedId) return;
-    const el = findElement(state.selectedId);
-    if (!el) return;
+    // Draw a selection outline for every selected element so the user can
+    // see all multi-select members; only the primary gets specialty handles
+    // (bbox scale, line endpoints, path / poly vertex dots).
+    for (const id of state.selectedIds) {
+        const el = findElement(id);
+        if (!el) continue;
+        renderHandlesForElement(el, id === state.selectedId);
+    }
+}
+
+function renderHandlesForElement(el, isPrimary) {
     const def = TYPES[el.type];
 
     // Wrap handles in a <g> with the *cumulative* transform from the root
@@ -1196,13 +1207,17 @@ function renderHandles() {
     if (bb) {
         const pad = 2;
         const outline = document.createElementNS(SVG_NS, 'rect');
-        outline.setAttribute('class', 'selection-outline');
+        outline.setAttribute('class', 'selection-outline' + (isPrimary ? '' : ' secondary'));
         outline.setAttribute('x', bb.x - pad);
         outline.setAttribute('y', bb.y - pad);
         outline.setAttribute('width', bb.width + 2 * pad);
         outline.setAttribute('height', bb.height + 2 * pad);
         target.appendChild(outline);
     }
+
+    // All specialty handles only render on the primary selection. The
+    // outlines above mark the rest of the multi-selection.
+    if (!isPrimary) return;
 
     // Bbox scale handles: shown for any element with a non-degenerate bbox
     // *and* a TYPES.scaleAround implementation. Container types like <g>
@@ -1359,6 +1374,26 @@ function buildGeomFields(el) {
     }
 }
 
+function updateMultiSelectIndicator() {
+    let badge = document.getElementById('multi-select-status');
+    if (!badge) {
+        badge = document.createElement('div');
+        badge.id = 'multi-select-status';
+        badge.className = 'multi-select-status muted';
+        const typeRow = document.getElementById('i-type').closest('.row');
+        if (typeRow && typeRow.parentNode) {
+            typeRow.parentNode.insertBefore(badge, typeRow.nextSibling);
+        }
+    }
+    const n = state.selectedIds.size;
+    if (n > 1) {
+        badge.hidden = false;
+        badge.textContent = `+${n - 1} more selected (${n} total)`;
+    } else {
+        badge.hidden = true;
+    }
+}
+
 function updateInspector() {
     if (!state.selectedId) {
         inspectorEmpty.hidden = false;
@@ -1381,6 +1416,11 @@ function updateInspector() {
         idInput.classList.remove('invalid');
     }
     document.getElementById('i-type').value = el.type;
+
+    // "+N more selected" indicator: visible only when multi-select is
+    // active. The inspector still shows the primary element; the others
+    // travel with it (move / delete) but aren't directly edited here.
+    updateMultiSelectIndicator();
 
     document.getElementById('geom-group').hidden = (TYPES[el.type].geomFields || []).length === 0;
 
@@ -2027,6 +2067,15 @@ function commitIdInput() {
     const oldId = el.id;
     el.id = proposed;
     if (state.selectedId === oldId) state.selectedId = proposed;
+    if (state.selectedIds.has(oldId)) {
+        state.selectedIds.delete(oldId);
+        state.selectedIds.add(proposed);
+    }
+    if (state.selectionAscentRoot === oldId) state.selectionAscentRoot = proposed;
+    if (state.outline && state.outline.collapsedNodes && state.outline.collapsedNodes.has(oldId)) {
+        state.outline.collapsedNodes.delete(oldId);
+        state.outline.collapsedNodes.add(proposed);
+    }
     idInput.classList.remove('invalid');
     render();
     pushHistory();
@@ -2371,6 +2420,8 @@ function applySource() {
     state.elements = newElements;
     state.nextId = idTracker.maxId;
     state.selectedId = null;
+    state.selectedIds.clear();
+    state.selectedSegmentIdx = null;
     // Force inspector lists to rebuild on next render so any cached
     // segment/point row closures don't reference orphaned el objects.
     segmentsBuiltSig = null;
@@ -2511,9 +2562,25 @@ palette.addEventListener('click', (e) => {
 });
 
 // ===== Selection =====
+// Invariant: when state.selectedId is non-null it is always also a member of
+// state.selectedIds. When state.selectedId is null, state.selectedIds is
+// empty. selectedId is the *primary* selection — it drives the inspector,
+// the handles layer, Alt+click ascent, etc. — and is always the most
+// recently added member of the set.
 function selectElement(id, opts) {
+    const additive = !!(opts && opts.additive);
     if (state.selectedId !== id) state.selectedSegmentIdx = null;
-    state.selectedId = id;
+    if (id == null) {
+        state.selectedId = null;
+        state.selectedIds.clear();
+    } else if (additive) {
+        state.selectedIds.add(id);
+        state.selectedId = id;
+    } else {
+        state.selectedIds.clear();
+        state.selectedIds.add(id);
+        state.selectedId = id;
+    }
     // Any non-ascent selection ends the current ascent chain; the next
     // Alt+click will capture wherever the user is now as the new wrap
     // target. Calls coming from ascendSelectionOrWrap pass viaAscent.
@@ -2525,13 +2592,72 @@ function selectElement(id, opts) {
     renderOutline();
 }
 
+// Shift / Ctrl-click toggle. If `id` is already in the selection it is
+// removed; if it was the primary, another member becomes primary (or the
+// selection clears). If `id` is not in the selection it is added and
+// becomes the new primary.
+function toggleElementInSelection(id) {
+    if (id == null) return;
+    if (state.selectedIds.has(id)) {
+        state.selectedIds.delete(id);
+        if (state.selectedId === id) {
+            // Pick any remaining member as the new primary; iteration
+            // order on Set is insertion order, so the most-recently
+            // added survivor would be at the end — we just take the
+            // last via Array.from to keep it predictable.
+            const remaining = Array.from(state.selectedIds);
+            state.selectedId = remaining.length ? remaining[remaining.length - 1] : null;
+            state.selectedSegmentIdx = null;
+        }
+        state.selectionAscentRoot = null;
+        renderHandles();
+        updateInspector();
+        renderOutline();
+        return;
+    }
+    selectElement(id, { additive: true });
+}
+
+// Replace the selection with the given list of ids. The last id becomes
+// the primary. Empty list clears the selection.
+function selectMany(ids) {
+    state.selectedIds.clear();
+    state.selectedSegmentIdx = null;
+    state.selectionAscentRoot = null;
+    if (!ids || ids.length === 0) {
+        state.selectedId = null;
+    } else {
+        for (const id of ids) state.selectedIds.add(id);
+        state.selectedId = ids[ids.length - 1];
+    }
+    renderHandles();
+    updateInspector();
+    renderOutline();
+}
+
+// Drop any ids that no longer exist (e.g. after applySource / restoreSnapshot
+// / restoreSession). Caller is responsible for rendering.
+function pruneSelectionToExisting() {
+    for (const id of Array.from(state.selectedIds)) {
+        if (!findElement(id)) state.selectedIds.delete(id);
+    }
+    if (state.selectedId && !state.selectedIds.has(state.selectedId)) {
+        const remaining = Array.from(state.selectedIds);
+        state.selectedId = remaining.length ? remaining[remaining.length - 1] : null;
+        state.selectedSegmentIdx = null;
+    }
+}
+
 // ===== Add element =====
 function addElement(type, p) {
     const def = TYPES[type];
     const attrs = { ...def.defaults(), ...def.atPoint(p) };
     const el = { id: nextId(type), type, attrs, children: [] };
     state.elements.push(el);
+    state.selectedIds.clear();
+    state.selectedIds.add(el.id);
     state.selectedId = el.id;
+    state.selectedSegmentIdx = null;
     return el;
 }
 
@@ -2682,21 +2808,84 @@ canvas.addEventListener('pointerdown', (e) => {
     const elementEl = e.target.closest('[data-editor-element]');
     if (elementEl) {
         const id = elementEl.dataset.editorElement;
-        if (state.selectedId !== id) selectElement(id);
-        const el = findElement(state.selectedId);
+        // Shift / Ctrl / Cmd-click on an element toggles its membership in
+        // the multi-selection but does not start a drag.
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+            toggleElementInSelection(id);
+            e.preventDefault();
+            return;
+        }
+        // Plain click: if the clicked element is already in the selection
+        // keep the set and just shift the primary to it; otherwise replace
+        // selection with this single element.
+        if (!state.selectedIds.has(id)) {
+            selectElement(id);
+        } else if (state.selectedId !== id) {
+            state.selectedId = id;
+            state.selectedSegmentIdx = null;
+            state.selectionAscentRoot = null;
+            renderHandles();
+            updateInspector();
+            renderOutline();
+        }
+        // Build a drag target list from the current selection, dropping any
+        // ids whose ancestor is also selected (the ancestor will move them).
+        const movingIds = pruneDescendantsFromSet(state.selectedIds);
+        const targets = [];
+        for (const mid of movingIds) {
+            const mel = findElement(mid);
+            if (!mel) continue;
+            targets.push({
+                id: mid,
+                startAttrs: cloneAttrs(mel.attrs),
+                cumOps: cumulativeTransformOps(mel),
+            });
+        }
+        if (!targets.length) return;
         drag = {
             kind: 'move',
             startPoint: p,
-            startAttrs: cloneAttrs(el.attrs),
-            cumOps: cumulativeTransformOps(el),
+            targets,
         };
         canvas.setPointerCapture(e.pointerId);
         e.preventDefault();
         return;
     }
 
-    if (state.selectedId) selectElement(null);
+    // Empty canvas: start a marquee. If the pointer moves enough, we treat
+    // it as a rectangle-select on pointerup; if it doesn't move, pointerup
+    // falls back to "deselect everything".
+    drag = {
+        kind: 'marquee',
+        startPoint: p,
+        currentPoint: p,
+        additive: !!(e.shiftKey || e.ctrlKey || e.metaKey),
+        baseIds: (e.shiftKey || e.ctrlKey || e.metaKey) ? new Set(state.selectedIds) : null,
+        rectEl: null,
+        moved: false,
+    };
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
 });
+
+// Given a Set of element ids, return an array containing only those ids
+// whose ancestor chain doesn't contain another member of the set. This is
+// what we want when dragging a multi-selection: moving an ancestor already
+// moves its descendants, so applying the translate to both would double
+// the delta on the descendant.
+function pruneDescendantsFromSet(ids) {
+    const out = [];
+    for (const id of ids) {
+        let info = findElementInfo(id);
+        let isDescendant = false;
+        while (info && info.parent) {
+            if (ids.has(info.parent.id)) { isDescendant = true; break; }
+            info = findElementInfo(info.parent.id);
+        }
+        if (!isDescendant) out.push(id);
+    }
+    return out;
+}
 
 function cloneAttrs(attrs) {
     const out = { ...attrs };
@@ -2715,22 +2904,48 @@ function cloneAttrs(attrs) {
 canvas.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const p = svgPoint(e.clientX, e.clientY);
+
+    if (drag.kind === 'marquee') {
+        drag.currentPoint = p;
+        const dxv = p.x - drag.startPoint.x;
+        const dyv = p.y - drag.startPoint.y;
+        if (!drag.moved && (Math.abs(dxv) > 1 || Math.abs(dyv) > 1)) {
+            drag.moved = true;
+        }
+        updateMarqueeRect();
+        return;
+    }
+
+    if (drag.kind === 'move') {
+        // Multi-target move: each target moved by the same viewBox delta,
+        // converted into its own local coord space using its captured
+        // cumulative ops. This way a child and its (non-selected) parent
+        // both follow the pointer consistently.
+        const dxv = p.x - drag.startPoint.x;
+        const dyv = p.y - drag.startPoint.y;
+        for (const t of drag.targets) {
+            const tel = findElement(t.id);
+            if (!tel) continue;
+            const def = TYPES[tel.type];
+            if (!def || !def.translate) continue;
+            const ops = (t.cumOps && t.cumOps.length) ? t.cumOps : null;
+            const local = viewBoxDeltaToLocal(dxv, dyv, ops);
+            tel.attrs = cloneAttrs(t.startAttrs);
+            def.translate(tel.attrs, local.dx, local.dy);
+            snapGeom(tel, state.precision);
+        }
+        render();
+        return;
+    }
+
+    // All remaining drag kinds (scale, handle, path-handle, poly-handle)
+    // operate on the primary element only — handles only render for the
+    // primary, so the user can only initiate these on the primary.
     const el = findElement(state.selectedId);
     if (!el) return;
     const def = TYPES[el.type];
-    // Cumulative ops (root → element, including element's own transform)
-    // were captured at drag-start in drag.cumOps and don't change for the
-    // duration of the drag. All inverse-transform math uses them to
-    // convert viewBox coords to the element's local coord space.
     const ops = (drag.cumOps && drag.cumOps.length) ? drag.cumOps : null;
-    if (drag.kind === 'move') {
-        const dxv = p.x - drag.startPoint.x;
-        const dyv = p.y - drag.startPoint.y;
-        const local = viewBoxDeltaToLocal(dxv, dyv, ops);
-        el.attrs = cloneAttrs(drag.startAttrs);
-        def.translate(el.attrs, local.dx, local.dy);
-        snapGeom(el, state.precision);
-    } else if (drag.kind === 'scale') {
+    if (drag.kind === 'scale') {
         // Scale relative to the bbox at drag-start. Precision is intentionally
         // NOT honored for scale (per spec).
         const localP = viewBoxPointToLocal(p, ops);
@@ -2776,12 +2991,110 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 canvas.addEventListener('pointerup', (e) => {
-    if (drag) {
-        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (!drag) return;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (drag.kind === 'marquee') {
+        const wasAdditive = drag.additive;
+        const baseIds = drag.baseIds;
+        const moved = drag.moved;
+        const startPoint = drag.startPoint;
+        const endPoint = drag.currentPoint;
+        clearMarqueeRect();
         drag = null;
-        pushHistory();
+        if (!moved) {
+            // Bare click on empty canvas: deselect everything (non-additive
+            // only — a shift-click on empty space is a no-op).
+            if (!wasAdditive && state.selectedId) selectElement(null);
+            return;
+        }
+        const rect = normalizedRect(startPoint, endPoint);
+        const hits = collectLeafIdsInMarquee(rect);
+        if (wasAdditive) {
+            const merged = new Set(baseIds || []);
+            for (const id of hits) merged.add(id);
+            selectMany(Array.from(merged));
+        } else {
+            selectMany(hits);
+        }
+        return;
     }
+    drag = null;
+    pushHistory();
 });
+
+// ===== Marquee rectangle (rendered in handles layer, viewBox coords) =====
+function updateMarqueeRect() {
+    if (!drag || drag.kind !== 'marquee') return;
+    const r = normalizedRect(drag.startPoint, drag.currentPoint);
+    if (!drag.rectEl) {
+        drag.rectEl = document.createElementNS(SVG_NS, 'rect');
+        drag.rectEl.setAttribute('class', 'marquee-rect');
+        handlesLayer.appendChild(drag.rectEl);
+    }
+    drag.rectEl.setAttribute('x', r.x);
+    drag.rectEl.setAttribute('y', r.y);
+    drag.rectEl.setAttribute('width', r.width);
+    drag.rectEl.setAttribute('height', r.height);
+}
+function clearMarqueeRect() {
+    if (drag && drag.rectEl && drag.rectEl.parentNode) {
+        drag.rectEl.parentNode.removeChild(drag.rectEl);
+        drag.rectEl = null;
+    }
+}
+function normalizedRect(a, b) {
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    return { x, y, width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+}
+
+// Marquee hit-test: collect leaf elements whose viewBox-space bounding box
+// intersects the marquee rect. "Leaf" means no children — containers like
+// <g> aren't selected by marquee (the user can pick them via the outline).
+function collectLeafIdsInMarquee(rect) {
+    const ids = [];
+    walkTree((el) => {
+        if (el.children && el.children.length) return;
+        const bb = elementViewBoxBBox(el);
+        if (!bb) return;
+        if (rectsIntersect(rect, bb)) ids.push(el.id);
+    });
+    return ids;
+}
+
+function rectsIntersect(a, b) {
+    return !(a.x + a.width < b.x ||
+             b.x + b.width < a.x ||
+             a.y + a.height < b.y ||
+             b.y + b.height < a.y);
+}
+
+// Element's bbox transformed into viewBox (root) coords. Applies the
+// element's cumulative transform to the 4 corners of its local bbox and
+// returns the axis-aligned bounding box of those projected corners.
+function elementViewBoxBBox(el) {
+    const bb = computeBBox(el);
+    if (!bb) return null;
+    const ops = cumulativeTransformOps(el);
+    if (!ops.length) return { x: bb.x, y: bb.y, width: bb.width, height: bb.height };
+    const m = transformMatrix(ops);
+    const corners = [
+        { x: bb.x,             y: bb.y },
+        { x: bb.x + bb.width,  y: bb.y },
+        { x: bb.x + bb.width,  y: bb.y + bb.height },
+        { x: bb.x,             y: bb.y + bb.height },
+    ];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const c of corners) {
+        const X = m.a * c.x + m.c * c.y + m.e;
+        const Y = m.b * c.x + m.d * c.y + m.f;
+        if (X < minX) minX = X;
+        if (Y < minY) minY = Y;
+        if (X > maxX) maxX = X;
+        if (Y > maxY) maxY = Y;
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
 
 // ===== Keyboard =====
 document.addEventListener('keydown', (e) => {
@@ -2814,11 +3127,27 @@ document.addEventListener('keydown', (e) => {
 
 function deleteSelected() {
     if (!state.selectedId) return;
-    const info = findElementInfo(state.selectedId);
-    if (!info) return;
     flushDebounce();
-    info.siblings.splice(info.idx, 1);
+    // When multiple ids share a parent we have to splice from the highest
+    // index down so earlier removals don't shift later indices. Drop
+    // descendants up front — removing an ancestor takes them along.
+    const ids = pruneDescendantsFromSet(state.selectedIds);
+    const bySiblings = new Map();
+    for (const id of ids) {
+        const info = findElementInfo(id);
+        if (!info) continue;
+        let list = bySiblings.get(info.siblings);
+        if (!list) { list = []; bySiblings.set(info.siblings, list); }
+        list.push(info.idx);
+    }
+    if (bySiblings.size === 0) return;
+    for (const [siblings, idxs] of bySiblings) {
+        idxs.sort((a, b) => b - a);
+        for (const i of idxs) siblings.splice(i, 1);
+    }
+    state.selectedIds.clear();
     state.selectedId = null;
+    state.selectedSegmentIdx = null;
     render();
     pushHistory();
 }
@@ -2830,6 +3159,7 @@ document.getElementById('btn-clear').addEventListener('click', () => {
     flushDebounce();
     state.elements = [];
     state.selectedId = null;
+    state.selectedIds.clear();
     render();
     pushHistory();
 });
@@ -2845,6 +3175,8 @@ function duplicateSelected() {
     if (def && def.translate) def.translate(clone.attrs, 10, 10);
     // Insert the clone immediately after the original, in the same siblings list.
     info.siblings.splice(info.idx + 1, 0, clone);
+    state.selectedIds.clear();
+    state.selectedIds.add(clone.id);
     state.selectedId = clone.id;
     state.selectedSegmentIdx = null;
     render();
@@ -2993,8 +3325,10 @@ async function startImagePlacement(point) {
         _displayHref: displayUrl,                 // session-only blob URL for editor rendering
         preserveAspectRatio: 'xMidYMid meet',
     };
-    const el = { id: nextId('image'), type: 'image', attrs };
+    const el = { id: nextId('image'), type: 'image', attrs, children: [] };
     state.elements.push(el);
+    state.selectedIds.clear();
+    state.selectedIds.add(el.id);
     state.selectedId = el.id;
     state.selectedSegmentIdx = null;
     render();
@@ -3273,7 +3607,9 @@ function restoreSession(payload) {
     });
     state.nextId = maxId;
     state.selectedId = null;
+    state.selectedIds.clear();
     state.selectedSegmentIdx = null;
+    state.selectionAscentRoot = null;
     // Force inspector lists to rebuild with fresh closures.
     segmentsBuiltSig = null;
     polyPointsBuiltSig = null;
@@ -3803,7 +4139,13 @@ function buildOutlineDOM() {
         idSpan.textContent = el.id;
         row.appendChild(idSpan);
 
-        row.addEventListener('click', () => selectElement(el.id));
+        row.addEventListener('click', (ev) => {
+            if (ev.shiftKey || ev.ctrlKey || ev.metaKey) {
+                toggleElementInSelection(el.id);
+            } else {
+                selectElement(el.id);
+            }
+        });
 
         container.appendChild(row);
 
@@ -3825,7 +4167,9 @@ function renderOutline() {
     const container = document.getElementById('outline-tree');
     if (!container) return;
     for (const row of container.querySelectorAll('.outline-row')) {
-        row.classList.toggle('selected', row.dataset.elementId === state.selectedId);
+        const id = row.dataset.elementId;
+        row.classList.toggle('selected', state.selectedIds.has(id));
+        row.classList.toggle('primary', id === state.selectedId);
     }
 }
 
