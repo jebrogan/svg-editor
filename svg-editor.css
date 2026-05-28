@@ -26,10 +26,12 @@ html, body {
 
 #app {
     --outline-width: 0px;
+    --source-height: 200px;
+    --calc-height: 240px;
     display: grid;
     height: 100vh;
     grid-template-columns: 180px var(--outline-width) 1fr 280px;
-    grid-template-rows: 40px 1fr 200px;
+    grid-template-rows: 40px 1fr var(--source-height);
     grid-template-areas:
         "top      top      top      top"
         "palette  outline  canvas   inspector"
@@ -39,12 +41,23 @@ html, body {
 }
 #app.outline-on { --outline-width: 240px; }
 #app.calc-on {
-    grid-template-rows: 40px 1fr 240px 200px;
+    grid-template-rows: 40px 1fr var(--calc-height) var(--source-height);
     grid-template-areas:
         "top      top      top      top"
         "palette  outline  canvas   inspector"
         "palette  outline  calc     inspector"
         "palette  outline  source   inspector";
+}
+
+/* Panel resize handles (top edge of source / calc panels) */
+.panel-resize-handle {
+    position: absolute;
+    top: -2px;
+    left: 0;
+    right: 0;
+    height: 5px;
+    cursor: ns-resize;
+    z-index: 3;
 }
 
 #topbar {
@@ -234,6 +247,7 @@ button:disabled:hover { background: var(--panel-2); }
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
 }
 
 #calc-panel {
@@ -242,6 +256,7 @@ button:disabled:hover { background: var(--panel-2); }
     display: none;
     flex-direction: column;
     min-height: 0;
+    position: relative;
 }
 #app.calc-on #calc-panel { display: flex; }
 

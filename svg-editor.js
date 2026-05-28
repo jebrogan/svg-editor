@@ -32,11 +32,15 @@ const state = {
         width: 240,             // panel width when expanded, in px
         collapsedNodes: new Set(),  // element ids that are collapsed; default everything expanded
     },
+    source: {
+        height: 200,            // source panel height in px (drag-resizable)
+    },
     calc: {
         expanded: false,
         precision: 3,         // independent of state.precision; 'free' allowed
         blocks: [],           // { id, type, label, state }
         nextId: 1,
+        height: 240,            // panel height when expanded, in px (drag-resizable)
     },
 };
 
@@ -3786,7 +3790,11 @@ function renderOutline() {
 function applyOutlineVisibility() {
     const app = document.getElementById('app');
     app.classList.toggle('outline-on', state.outline.expanded);
-    app.style.setProperty('--outline-width', state.outline.width + 'px');
+    // When collapsed, the inline override must drop to 0 so the
+    // outline column actually collapses; otherwise a leftover 240px
+    // gap sits between the palette and the canvas.
+    app.style.setProperty('--outline-width',
+        state.outline.expanded ? (state.outline.width + 'px') : '0px');
     const btn = document.getElementById('outline-toggle');
     if (btn) btn.textContent = state.outline.expanded ? 'Hide outline' : 'Show outline';
     if (state.outline.expanded) {
@@ -3833,6 +3841,46 @@ document.getElementById('outline-toggle').addEventListener('click', () => {
     });
 })();
 
+// Source / calculator panel resize handles. Both panels live in the bottom
+// rows of the app grid and shrink/grow by dragging their top edge upward.
+function panelHeightLimits() {
+    const max = Math.min(800, Math.floor(window.innerHeight * 0.75));
+    return { min: 60, max };
+}
+function attachPanelResize(selector, dim, cssVar, storageKey) {
+    const handle = document.querySelector(selector);
+    if (!handle) return;
+    let dragging = false;
+    let startY = 0;
+    let startHeight = 0;
+    handle.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        startY = e.clientY;
+        startHeight = (dim === 'source') ? state.source.height : state.calc.height;
+        handle.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+    handle.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const { min, max } = panelHeightLimits();
+        const dy = e.clientY - startY;
+        const newH = Math.max(min, Math.min(max, startHeight - dy));
+        if (dim === 'source') state.source.height = newH;
+        else state.calc.height = newH;
+        document.getElementById('app').style.setProperty(cssVar, newH + 'px');
+    });
+    handle.addEventListener('pointerup', (e) => {
+        if (!dragging) return;
+        dragging = false;
+        try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+        const h = (dim === 'source') ? state.source.height : state.calc.height;
+        try { localStorage.setItem(storageKey, String(h)); } catch (_) {}
+        if (state.grid.enabled) requestAnimationFrame(renderHtmlRulers);
+    });
+}
+attachPanelResize('#source-panel .panel-resize-handle', 'source', '--source-height', 'svgEditor.sourceHeight');
+attachPanelResize('#calc-panel .panel-resize-handle',   'calc',   '--calc-height',   'svgEditor.calcHeight');
+
 // Wire calculator UI
 document.getElementById('calc-toggle').addEventListener('click', () => {
     state.calc.expanded = !state.calc.expanded;
@@ -3867,13 +3915,22 @@ workingDirInput.addEventListener('input', () => {
     try { localStorage.setItem('svgEditor.workingDir', state.workingDir); } catch (_) {}
 });
 
-// Restore outline panel preferences from localStorage.
+// Restore outline / source / calc panel preferences from localStorage.
 try {
     const w = parseInt(localStorage.getItem('svgEditor.outlineWidth') || '', 10);
     if (Number.isFinite(w) && w >= 120 && w <= 600) state.outline.width = w;
     const exp = localStorage.getItem('svgEditor.outlineExpanded');
     if (exp === '1') state.outline.expanded = true;
+    const sh = parseInt(localStorage.getItem('svgEditor.sourceHeight') || '', 10);
+    if (Number.isFinite(sh) && sh >= 60 && sh <= 800) state.source.height = sh;
+    const ch = parseInt(localStorage.getItem('svgEditor.calcHeight') || '', 10);
+    if (Number.isFinite(ch) && ch >= 60 && ch <= 800) state.calc.height = ch;
 } catch (_) {}
+{
+    const app = document.getElementById('app');
+    app.style.setProperty('--source-height', state.source.height + 'px');
+    app.style.setProperty('--calc-height', state.calc.height + 'px');
+}
 applyOutlineVisibility();
 
 // ===== Init =====
