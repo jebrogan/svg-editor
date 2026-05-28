@@ -192,6 +192,41 @@ const TYPES = {
         },
     },
 
+    g: {
+        // Container type: holds children, no intrinsic geometry of its own.
+        // Created via Ctrl+G (later step), not via a palette tool button, so
+        // atPoint is a placeholder that just produces an empty group.
+        container: true,
+        defaults: () => ({}),
+        atPoint: () => ({}),
+        geomFields: [],
+        bbox: null, // use DOM getBBox (union of children)
+        handles: () => [],
+        applyHandle: () => {},
+        // The translate function receives a delta expressed in this element's
+        // OWN local space (post-its-own-transform), matching what pointermove
+        // computes via inverse(cumulative). For a group we need to push that
+        // delta into the *parent's* coord space (where the group's first
+        // translate op lives), so we apply the linear part of the group's
+        // own transform matrix.
+        translate: (a, dxOwn, dyOwn) => {
+            if (!Array.isArray(a.transform)) a.transform = [];
+            const m = transformMatrix(a.transform);
+            const dxParent = m.a * dxOwn + m.c * dyOwn;
+            const dyParent = m.b * dxOwn + m.d * dyOwn;
+            if (a.transform.length > 0 && a.transform[0].type === 'translate') {
+                a.transform[0].params[0] += dxParent;
+                a.transform[0].params[1] += dyParent;
+            } else {
+                a.transform.unshift({ type: 'translate', params: [dxParent, dyParent] });
+            }
+        },
+        // No scaleAround intentionally: in step B, groups can't be scaled by
+        // dragging bbox handles. Scale via the transform inspector instead.
+        // The handle-drawing code checks for scaleAround and skips drawing
+        // scale handles when it's absent.
+    },
+
     polyline: {
         defaults: () => ({ fill: 'none', stroke: '#000000', 'stroke-width': 2, 'fill-opacity': 1, points: [] }),
         atPoint: (p) => ({ points: [[p.x, p.y], [p.x + 60, p.y + 40], [p.x + 120, p.y]] }),
@@ -636,6 +671,29 @@ function viewBoxPointToLocal(point, ops) {
     };
 }
 
+// Return a flat list of transform ops representing the cumulative transform
+// from the root down to (and including) the given element. Outermost
+// ancestor's ops come first, the element's own ops last — matches how
+// SVG composes transform attributes left-to-right (leftmost = outermost).
+function cumulativeTransformOps(el) {
+    const chain = [];
+    let cur = el;
+    while (cur) {
+        chain.unshift(cur);
+        const info = findElementInfo(cur.id);
+        cur = info ? info.parent : null;
+    }
+    const ops = [];
+    for (const node of chain) {
+        if (Array.isArray(node.attrs.transform)) {
+            for (const op of node.attrs.transform) {
+                ops.push({ type: op.type, params: op.params.slice() });
+            }
+        }
+    }
+    return ops;
+}
+
 // viewBox delta → element-local delta (linear part only; no translation)
 function viewBoxDeltaToLocal(dx, dy, ops) {
     if (!ops || !ops.length) return { dx, dy };
@@ -917,6 +975,13 @@ function createSvgNode(el) {
 
 function applyAttrs(node, el) {
     const a = el.attrs;
+    if (el.type === 'g') {
+        for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity']) {
+            if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
+        }
+        applyTransformAttr(node, a);
+        return;
+    }
     if (el.type === 'text') {
         for (const k of ['x','y','font-size','font-family','fill','stroke','stroke-width','fill-opacity','stroke-dasharray']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
@@ -1104,13 +1169,14 @@ function renderHandles() {
     if (!el) return;
     const def = TYPES[el.type];
 
-    // If the element has a transform, route all handle DOM into a <g> with
-    // the same transform so the outline / handles visually wrap the rendered
-    // (transformed) element. Drag math compensates by inverting this transform.
+    // Wrap handles in a <g> with the *cumulative* transform from the root
+    // to this element so the outline / handles visually match the rendered
+    // (transformed) element regardless of how many groups nest above it.
     let target = handlesLayer;
-    if (Array.isArray(el.attrs.transform) && el.attrs.transform.length) {
+    const cumOps = cumulativeTransformOps(el);
+    if (cumOps.length) {
         const wrap = document.createElementNS(SVG_NS, 'g');
-        wrap.setAttribute('transform', serializeTransform(el.attrs.transform));
+        wrap.setAttribute('transform', serializeTransform(cumOps));
         handlesLayer.appendChild(wrap);
         target = wrap;
     }
@@ -1127,8 +1193,10 @@ function renderHandles() {
         target.appendChild(outline);
     }
 
-    // Bbox scale handles: shown for any element with a non-degenerate bbox.
-    if (bb && bb.width > 0 && bb.height > 0) {
+    // Bbox scale handles: shown for any element with a non-degenerate bbox
+    // *and* a TYPES.scaleAround implementation. Container types like <g>
+    // omit scaleAround and therefore don't get drag-scale handles in step B.
+    if (bb && bb.width > 0 && bb.height > 0 && def.scaleAround) {
         for (const d of ['nw','n','ne','e','se','s','sw','w']) {
             const p = bboxHandlePos(d, bb);
             const sq = document.createElementNS(SVG_NS, 'rect');
@@ -2014,7 +2082,7 @@ function serialize() {
     const c = state.canvas;
     const viewBox = `${formatPathNum(c.x)} ${formatPathNum(c.y)} ${formatPathNum(c.width)} ${formatPathNum(c.height)}`;
     const lines = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">`];
-    for (const el of state.elements) lines.push('  ' + serializeElement(el));
+    for (const el of state.elements) lines.push(serializeElement(el, 1));
     lines.push('</svg>');
     return lines.join('\n');
 }
@@ -2084,20 +2152,32 @@ function applyCanvasPreset(spec) {
     pushHistory();
 }
 
-function serializeElement(el) {
+function serializeElement(el, indent) {
     const a = el.attrs;
+    const pad = '  '.repeat(indent || 0);
     const parts = [`id="${el.id}"`];
     const addTransform = () => {
         if (Array.isArray(a.transform) && a.transform.length) {
             parts.push(`transform="${escapeAttr(serializeTransform(a.transform))}"`);
         }
     };
+    if (el.type === 'g') {
+        for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity']) {
+            if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
+        }
+        addTransform();
+        if (el.children && el.children.length) {
+            const inner = el.children.map(c => serializeElement(c, (indent || 0) + 1)).join('\n');
+            return `${pad}<g ${parts.join(' ')}>\n${inner}\n${pad}</g>`;
+        }
+        return `${pad}<g ${parts.join(' ')} />`;
+    }
     if (el.type === 'text') {
         for (const k of ['x','y','font-size','font-family','fill','fill-opacity','stroke','stroke-width','stroke-dasharray']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        return `<text ${parts.join(' ')}>${escapeText(a.content ?? '')}</text>`;
+        return `${pad}<text ${parts.join(' ')}>${escapeText(a.content ?? '')}</text>`;
     }
     if (el.type === 'path') {
         parts.push(`d="${escapeAttr(serializePathData(a.segments))}"`);
@@ -2105,7 +2185,7 @@ function serializeElement(el) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        return `<path ${parts.join(' ')} />`;
+        return `${pad}<path ${parts.join(' ')} />`;
     }
     if (el.type === 'polyline' || el.type === 'polygon') {
         parts.push(`points="${escapeAttr(serializePoints(a.points))}"`);
@@ -2113,7 +2193,7 @@ function serializeElement(el) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        return `<${el.type} ${parts.join(' ')} />`;
+        return `${pad}<${el.type} ${parts.join(' ')} />`;
     }
     if (el.type === 'image') {
         for (const k of ['x','y','width','height','preserveAspectRatio']) {
@@ -2121,7 +2201,7 @@ function serializeElement(el) {
         }
         if (a.href) parts.push(`href="${escapeAttr(a.href)}"`);
         addTransform();
-        return `<image ${parts.join(' ')} />`;
+        return `${pad}<image ${parts.join(' ')} />`;
     }
     for (const [k, v] of Object.entries(a)) {
         if (k === 'content' || k === 'transform') continue;
@@ -2129,7 +2209,7 @@ function serializeElement(el) {
         parts.push(`${k}="${escapeAttr(v)}"`);
     }
     addTransform();
-    return `<${el.type} ${parts.join(' ')} />`;
+    return `${pad}<${el.type} ${parts.join(' ')} />`;
 }
 
 let canonicalSource = '';
@@ -2185,14 +2265,23 @@ function validateSource(text) {
         return { error: `Not SVG format (root is ${tagSeen})` };
     }
 
-    for (const child of root.children) {
-        const tag = child.tagName.toLowerCase();
-        if (!TYPES[tag]) {
-            const line = findElementLineInSource(text, tag);
-            const linePart = line > 0 ? `Line ${line}: ` : '';
-            return { error: `${linePart}element <${tag}> not supported` };
+    function checkChildren(parent) {
+        for (const child of parent.children) {
+            const tag = child.tagName.toLowerCase();
+            if (!TYPES[tag]) {
+                const line = findElementLineInSource(text, tag);
+                const linePart = line > 0 ? `Line ${line}: ` : '';
+                return `${linePart}element <${tag}> not supported`;
+            }
+            if (TYPES[tag].container) {
+                const inner = checkChildren(child);
+                if (inner) return inner;
+            }
         }
+        return null;
     }
+    const err = checkChildren(root);
+    if (err) return { error: err };
     return { svg: root };
 }
 
@@ -2214,9 +2303,9 @@ function applySource() {
         }
     }
 
-    const newElements = [];
-    let maxId = state.nextId;
-    for (const child of svg.children) {
+    const idTracker = { maxId: state.nextId };
+    let parseError = null;
+    function parseElementNode(child) {
         const type = child.tagName.toLowerCase();
         const attrs = {};
         for (const at of child.attributes) {
@@ -2227,32 +2316,22 @@ function applySource() {
         if (type === 'path') {
             try {
                 attrs.segments = parsePathData(child.getAttribute('d') || '');
-            } catch (e) {
-                showSourceStatus(`Invalid path d: ${e.message}`, true);
-                return;
-            }
+            } catch (e) { parseError = `Invalid path d: ${e.message}`; return null; }
             delete attrs.d;
         }
         if (type === 'polyline' || type === 'polygon') {
             try {
                 attrs.points = parsePoints(child.getAttribute('points') || '');
-            } catch (e) {
-                showSourceStatus(`Invalid ${type} points: ${e.message}`, true);
-                return;
-            }
+            } catch (e) { parseError = `Invalid ${type} points: ${e.message}`; return null; }
         }
         if (type === 'image') {
-            // Legacy: xlink:href → href
             if (!attrs.href && attrs['xlink:href']) attrs.href = attrs['xlink:href'];
             delete attrs['xlink:href'];
         }
         if (typeof attrs.transform === 'string') {
             try {
                 attrs.transform = parseTransform(attrs.transform);
-            } catch (e) {
-                showSourceStatus(`Invalid transform on <${type}>: ${e.message}`, true);
-                return;
-            }
+            } catch (e) { parseError = `Invalid transform on <${type}>: ${e.message}`; return null; }
             if (!attrs.transform.length) delete attrs.transform;
         }
         const defaults = TYPES[type].defaults();
@@ -2261,11 +2340,25 @@ function applySource() {
         }
         const id = child.getAttribute('id') || nextId(type);
         const m = id.match(/-(\d+)$/);
-        if (m) maxId = Math.max(maxId, parseInt(m[1], 10) + 1);
-        newElements.push({ id, type, attrs, children: [] });
+        if (m) idTracker.maxId = Math.max(idTracker.maxId, parseInt(m[1], 10) + 1);
+        const childrenOut = [];
+        if (TYPES[type].container) {
+            for (const sub of child.children) {
+                const parsed = parseElementNode(sub);
+                if (parseError) return null;
+                if (parsed) childrenOut.push(parsed);
+            }
+        }
+        return { id, type, attrs, children: childrenOut };
+    }
+    const newElements = [];
+    for (const child of svg.children) {
+        const parsed = parseElementNode(child);
+        if (parseError) { showSourceStatus(parseError, true); return; }
+        if (parsed) newElements.push(parsed);
     }
     state.elements = newElements;
-    state.nextId = maxId;
+    state.nextId = idTracker.maxId;
     state.selectedId = null;
     // Force inspector lists to rebuild on next render so any cached
     // segment/point row closures don't reference orphaned el objects.
@@ -2462,6 +2555,7 @@ canvas.addEventListener('pointerdown', (e) => {
                     anchor: bboxAnchor(dir, bb),
                     origBBox: { x: bb.x, y: bb.y, width: bb.width, height: bb.height },
                     startAttrs: cloneAttrs(el.attrs),
+                    cumOps: cumulativeTransformOps(el),
                 };
                 canvas.setPointerCapture(e.pointerId);
                 e.preventDefault();
@@ -2481,6 +2575,7 @@ canvas.addEventListener('pointerdown', (e) => {
                 ptIdx,
                 startPoint: p,
                 startAttrs: cloneAttrs(el.attrs),
+                cumOps: cumulativeTransformOps(el),
             };
             canvas.setPointerCapture(e.pointerId);
             e.preventDefault();
@@ -2502,6 +2597,7 @@ canvas.addEventListener('pointerdown', (e) => {
                     segIdx,
                     startPoint: p,
                     startAttrs: cloneAttrs(el.attrs),
+                    cumOps: cumulativeTransformOps(el),
                 };
             } else if (handleName === 'cp1' || handleName === 'cp2') {
                 drag = {
@@ -2510,6 +2606,7 @@ canvas.addEventListener('pointerdown', (e) => {
                     segIdx,
                     startPoint: p,
                     startAttrs: cloneAttrs(el.attrs),
+                    cumOps: cumulativeTransformOps(el),
                 };
             }
             if (drag) {
@@ -2523,6 +2620,7 @@ canvas.addEventListener('pointerdown', (e) => {
             handleName,
             startPoint: p,
             startAttrs: cloneAttrs(el.attrs),
+            cumOps: cumulativeTransformOps(el),
         };
         canvas.setPointerCapture(e.pointerId);
         e.preventDefault();
@@ -2538,6 +2636,7 @@ canvas.addEventListener('pointerdown', (e) => {
             kind: 'move',
             startPoint: p,
             startAttrs: cloneAttrs(el.attrs),
+            cumOps: cumulativeTransformOps(el),
         };
         canvas.setPointerCapture(e.pointerId);
         e.preventDefault();
@@ -2567,11 +2666,11 @@ canvas.addEventListener('pointermove', (e) => {
     const el = findElement(state.selectedId);
     if (!el) return;
     const def = TYPES[el.type];
-    // The element's transform is captured at drag-start (in drag.startAttrs)
-    // and does not change during the drag, so we use it for all inverse-
-    // transform math to convert viewBox coords into element-local coords.
-    const ops = (drag.startAttrs && Array.isArray(drag.startAttrs.transform))
-        ? drag.startAttrs.transform : null;
+    // Cumulative ops (root → element, including element's own transform)
+    // were captured at drag-start in drag.cumOps and don't change for the
+    // duration of the drag. All inverse-transform math uses them to
+    // convert viewBox coords to the element's local coord space.
+    const ops = (drag.cumOps && drag.cumOps.length) ? drag.cumOps : null;
     if (drag.kind === 'move') {
         const dxv = p.x - drag.startPoint.x;
         const dyv = p.y - drag.startPoint.y;
