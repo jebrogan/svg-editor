@@ -165,6 +165,20 @@ button:disabled:hover { background: var(--panel-2); }
     background: var(--accent-2);
     border-color: var(--accent);
 }
+/* The Add palette list grew past comfortable on-screen length once Defs
+   and Use joined; cap it to roughly ten buttons tall and scroll inside. */
+#palette .add-list {
+    max-height: 286px;
+    overflow-y: auto;
+    margin: 2px 0;
+    padding: 2px 2px 2px 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+#palette .add-list .tool-btn {
+    margin: 2px 4px;
+    width: calc(100% - 8px);
+}
 
 #canvas-wrap {
     grid-area: canvas;

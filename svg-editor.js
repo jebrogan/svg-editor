@@ -203,6 +203,51 @@ const TYPES = {
         },
     },
 
+    defs: {
+        // Library container: holds master copies of elements that get rendered
+        // via <use href="#id">. Same data shape as <g> (children, optional
+        // transform) but renders nothing directly — the browser hides defs
+        // content from the canvas unless something references it.
+        container: true,
+        defaults: () => ({}),
+        atPoint: () => ({}),
+        geomFields: [],
+        bbox: null,
+        handles: () => [],
+        applyHandle: () => {},
+        // defs has no visible canvas position; translate is a no-op.
+        translate: () => {},
+    },
+
+    use: {
+        // Leaf reference. href is "#<id>" of an element (usually inside
+        // <defs>). The browser inlines the referenced subtree at the <use>
+        // position when rendering. Movement is via transform, matching how
+        // <g> handles it (linear-part-of-own-transform mapping from local
+        // delta back into parent space).
+        defaults: () => ({}),
+        // When added via the "Use" palette tool, the canvas click point
+        // becomes the use's initial translate. Without a click point the
+        // use would render at (0,0) — easy to lose track of.
+        atPoint: (p) => ({ transform: [{ type: 'translate', params: [p.x, p.y] }] }),
+        geomFields: [],
+        bbox: null, // browser computes via DOM getBBox of the resolved ref
+        handles: () => [],
+        applyHandle: () => {},
+        translate: (a, dxOwn, dyOwn) => {
+            if (!Array.isArray(a.transform)) a.transform = [];
+            const m = transformMatrix(a.transform);
+            const dxParent = m.a * dxOwn + m.c * dyOwn;
+            const dyParent = m.b * dxOwn + m.d * dyOwn;
+            if (a.transform.length > 0 && a.transform[0].type === 'translate') {
+                a.transform[0].params[0] += dxParent;
+                a.transform[0].params[1] += dyParent;
+            } else {
+                a.transform.unshift({ type: 'translate', params: [dxParent, dyParent] });
+            }
+        },
+    },
+
     g: {
         // Container type: holds children, no intrinsic geometry of its own.
         // Created via Ctrl+G (later step), not via a palette tool button, so
@@ -980,7 +1025,12 @@ function escapeText(v) {
 // ===== DOM build =====
 function createSvgNode(el) {
     const node = document.createElementNS(SVG_NS, el.type);
+    // The editor identifies elements via data-editor-element so it can find
+    // them even when the DOM id is later removed or shadowed. The DOM `id`
+    // is also set so that SVG `<use href="#elId">` references resolve
+    // against the master copies the user puts in <defs>.
     node.setAttribute('data-editor-element', el.id);
+    node.setAttribute('id', el.id);
     applyAttrs(node, el);
     return node;
 }
@@ -991,6 +1041,17 @@ function applyAttrs(node, el) {
         for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') node.setAttribute(k, a[k]);
         }
+        applyTransformAttr(node, a);
+        return;
+    }
+    if (el.type === 'defs') {
+        // defs renders no inheritable presentation attrs on its own; children
+        // carry their own. transform is allowed for symmetry with <g>.
+        applyTransformAttr(node, a);
+        return;
+    }
+    if (el.type === 'use') {
+        if (a.href) node.setAttribute('href', a.href);
         applyTransformAttr(node, a);
         return;
     }
@@ -1422,6 +1483,17 @@ function updateInspector() {
     // travel with it (move / delete) but aren't directly edited here.
     updateMultiSelectIndicator();
 
+    // Fill / stroke groups are hidden for element types where they have
+    // no reliable effect: <defs> doesn't render at all, and <use> only
+    // applies fill/stroke if its referenced master doesn't already
+    // declare them (SVG inheritance), so showing the controls there is
+    // misleading. Keep the inspector minimal for these.
+    const hidePaint = (el.type === 'defs' || el.type === 'use');
+    const fillGroup = document.getElementById('fill-group');
+    const strokeGroup = document.getElementById('stroke-group');
+    if (fillGroup) fillGroup.hidden = hidePaint;
+    if (strokeGroup) strokeGroup.hidden = hidePaint;
+
     document.getElementById('geom-group').hidden = (TYPES[el.type].geomFields || []).length === 0;
 
     if (inspectorBuiltForId !== el.id) {
@@ -1476,6 +1548,14 @@ function updateInspector() {
         renderPolyPointList(el);
     } else {
         polyGroup.hidden = true;
+    }
+
+    const useGroup = document.getElementById('use-group');
+    if (el.type === 'use') {
+        useGroup.hidden = false;
+        setInputValueIfNotFocused(document.getElementById('i-use-href'), el.attrs.href || '');
+    } else {
+        useGroup.hidden = true;
     }
 
     // Show "Send to calc" only when something the calculator can consume is selected.
@@ -2135,6 +2215,23 @@ function wireInspector() {
         setAttr('font-family', e.target.value);
         pushHistoryDebounced();
     });
+    document.getElementById('i-use-href').addEventListener('input', (e) => {
+        const el = findElement(state.selectedId);
+        if (!el || el.type !== 'use') return;
+        const v = e.target.value;
+        if (v === '') delete el.attrs.href;
+        else el.attrs.href = v;
+        render();
+        pushHistoryDebounced();
+    });
+    document.getElementById('i-use-href-none').addEventListener('click', () => {
+        const el = findElement(state.selectedId);
+        if (!el || el.type !== 'use') return;
+        flushDebounce();
+        delete el.attrs.href;
+        render();
+        pushHistory();
+    });
 }
 
 // ===== Source text =====
@@ -2231,6 +2328,19 @@ function serializeElement(el, indent) {
             return `${pad}<g ${parts.join(' ')}>\n${inner}\n${pad}</g>`;
         }
         return `${pad}<g ${parts.join(' ')} />`;
+    }
+    if (el.type === 'defs') {
+        addTransform();
+        if (el.children && el.children.length) {
+            const inner = el.children.map(c => serializeElement(c, (indent || 0) + 1)).join('\n');
+            return `${pad}<defs ${parts.join(' ')}>\n${inner}\n${pad}</defs>`;
+        }
+        return `${pad}<defs ${parts.join(' ')} />`;
+    }
+    if (el.type === 'use') {
+        if (a.href) parts.push(`href="${escapeAttr(a.href)}"`);
+        addTransform();
+        return `${pad}<use ${parts.join(' ')} />`;
     }
     if (el.type === 'text') {
         for (const k of ['x','y','font-size','font-family','fill','fill-opacity','stroke','stroke-width','stroke-dasharray']) {
@@ -2384,7 +2494,7 @@ function applySource() {
                 attrs.points = parsePoints(child.getAttribute('points') || '');
             } catch (e) { parseError = `Invalid ${type} points: ${e.message}`; return null; }
         }
-        if (type === 'image') {
+        if (type === 'image' || type === 'use') {
             if (!attrs.href && attrs['xlink:href']) attrs.href = attrs['xlink:href'];
             delete attrs['xlink:href'];
         }
@@ -2558,7 +2668,15 @@ function updateToolUI() {
 palette.addEventListener('click', (e) => {
     const btn = e.target.closest('.tool-btn[data-tool]');
     if (!btn) return;
-    setTool(btn.dataset.tool);
+    const tool = btn.dataset.tool;
+    // <defs> has no canvas position to wait for, so the palette button
+    // adds one immediately rather than entering a tool mode. Every other
+    // Add button still goes through setTool → canvas click → addElement.
+    if (tool === 'defs') {
+        addDefs();
+        return;
+    }
+    setTool(tool);
 });
 
 // ===== Selection =====
@@ -3340,6 +3458,20 @@ document.getElementById('btn-z-backward').addEventListener('click', () => zMoveS
 document.getElementById('btn-z-back').addEventListener('click',     () => zMoveSelected('back'));
 document.getElementById('btn-group').addEventListener('click',      groupSelected);
 document.getElementById('btn-ungroup').addEventListener('click',    ungroupSelected);
+
+// Add an empty <defs> as the first child of the root. Multiple <defs>
+// blocks are allowed — the user can drag them around in the outline like
+// any other top-level element. Invoked from the Defs palette button (the
+// only "Add" button that doesn't go through tool-mode + canvas click).
+function addDefs() {
+    flushDebounce();
+    const defs = { id: nextId('defs'), type: 'defs', attrs: {}, children: [] };
+    state.elements.unshift(defs);
+    outlineBuiltSig = null;
+    selectElement(defs.id);
+    render();
+    pushHistory();
+}
 applyBtn.addEventListener('click', applySource);
 sourceEl.addEventListener('input', () => {
     applyBtn.disabled = sourceEl.value === canonicalSource;
@@ -4376,7 +4508,7 @@ function onOutlineDragEnd(ev) {
         outlineDragJustEnded = true;
         setTimeout(() => { outlineDragJustEnded = false; }, 0);
         flushDebounce();
-        const ok = applyOutlineDrop(Array.from(draggedIds), drop.targetId, drop.zone);
+        const ok = applyOutlineDrop(Array.from(draggedIds), drop.targetId, drop.zone, !!ev.shiftKey);
         if (ok) {
             outlineBuiltSig = null;
             render();
@@ -4440,23 +4572,43 @@ function clearOutlineDropIndicators() {
 // Apply the reparent. `draggedIds` are removed from their current parents
 // (in document order so refs stay valid via direct splice on the resolved
 // objects) and re-inserted at the target location.
-function applyOutlineDrop(draggedIds, targetId, zone) {
+//
+// Drag-into-defs (step H): when the destination is inside a <defs>
+// ancestor AND the source was NOT already inside defs, each moved element
+// leaves a <use href="#id"> behind at its original location — unless
+// `shiftKey` is held, in which case it's a pure move. Use is created in
+// place via splice(idx, 1, useEl) so indices of later refs in the same
+// siblings list don't shift.
+function applyOutlineDrop(draggedIds, targetId, zone, shiftKey) {
     const idSet = new Set(draggedIds);
     // Resolve to actual element objects in document order so we preserve
     // the relative ordering of the dragged subset after the move.
     const orderedRefs = [];
     walkTree((el) => { if (idSet.has(el.id)) orderedRefs.push(el); });
     if (!orderedRefs.length) return false;
-    // Remove from current locations. Each splice may invalidate earlier
-    // findElementInfo lookups for other dragged refs, so we re-lookup
-    // for each one.
+    const intoDefs = isDropDestinationInDefs(targetId, zone);
+    // Remove each element from its current parent. When moving into defs
+    // from outside, leave a <use> placeholder in its old slot (unless the
+    // user held Shift to suppress that).
     for (const el of orderedRefs) {
         const info = findElementInfo(el.id);
         if (!info) continue;
-        info.siblings.splice(info.idx, 1);
+        const fromInsideDefs = isElementInsideDefs(el.id);
+        if (intoDefs && !fromInsideDefs && !shiftKey) {
+            const useEl = {
+                id: nextId('use'),
+                type: 'use',
+                attrs: { href: '#' + el.id },
+                children: [],
+            };
+            info.siblings.splice(info.idx, 1, useEl);
+        } else {
+            info.siblings.splice(info.idx, 1);
+        }
     }
     // Now find the target (its position may have shifted as a side effect
-    // of the removals above).
+    // of the removals above; replacements with <use> don't shift indices,
+    // pure removals do — findElementInfo re-locates either way).
     if (zone === 'inside') {
         const tEl = findElement(targetId);
         if (!tEl) return false;
@@ -4473,6 +4625,34 @@ function applyOutlineDrop(draggedIds, targetId, zone) {
     const insertIdx = (zone === 'before') ? tInfo.idx : (tInfo.idx + 1);
     tInfo.siblings.splice(insertIdx, 0, ...orderedRefs);
     return true;
+}
+
+// Is the drop's destination parent inside a <defs> subtree?
+// For zone 'inside', the destination parent IS the target.
+// For zone 'before' / 'after', the destination parent is target's parent.
+function isDropDestinationInDefs(targetId, zone) {
+    const info = findElementInfo(targetId);
+    if (!info) return false;
+    let cur = (zone === 'inside') ? info.el : info.parent;
+    while (cur) {
+        if (cur.type === 'defs') return true;
+        const pInfo = findElementInfo(cur.id);
+        cur = pInfo ? pInfo.parent : null;
+    }
+    return false;
+}
+
+// Is this element somewhere inside a <defs> subtree?
+function isElementInsideDefs(elId) {
+    let info = findElementInfo(elId);
+    if (!info) return false;
+    let cur = info.parent;
+    while (cur) {
+        if (cur.type === 'defs') return true;
+        const pInfo = findElementInfo(cur.id);
+        cur = pInfo ? pInfo.parent : null;
+    }
+    return false;
 }
 
 function applyOutlineVisibility() {

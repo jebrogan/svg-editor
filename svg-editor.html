@@ -62,15 +62,19 @@
             <div class="section-label">Tools</div>
             <button class="tool-btn" data-tool="select" title="Select / move">Select</button>
             <div class="section-label">Add</div>
-            <button class="tool-btn" data-tool="rect">Rectangle</button>
-            <button class="tool-btn" data-tool="ellipse">Ellipse</button>
-            <button class="tool-btn" data-tool="circle">Circle</button>
-            <button class="tool-btn" data-tool="line">Line</button>
-            <button class="tool-btn" data-tool="text">Text</button>
-            <button class="tool-btn" data-tool="polyline">Polyline</button>
-            <button class="tool-btn" data-tool="polygon">Polygon</button>
-            <button class="tool-btn" data-tool="path">Path</button>
-            <button class="tool-btn" data-tool="image">Image</button>
+            <div class="add-list">
+                <button class="tool-btn" data-tool="rect">Rectangle</button>
+                <button class="tool-btn" data-tool="ellipse">Ellipse</button>
+                <button class="tool-btn" data-tool="circle">Circle</button>
+                <button class="tool-btn" data-tool="line">Line</button>
+                <button class="tool-btn" data-tool="text">Text</button>
+                <button class="tool-btn" data-tool="polyline">Polyline</button>
+                <button class="tool-btn" data-tool="polygon">Polygon</button>
+                <button class="tool-btn" data-tool="path">Path</button>
+                <button class="tool-btn" data-tool="image">Image</button>
+                <button class="tool-btn" data-tool="defs" title="Add an empty &lt;defs&gt; block at the top of the tree. Drag elements onto it in the outline to make reusable masters (and leave a &lt;use&gt; behind, unless Shift).">Defs</button>
+                <button class="tool-btn" data-tool="use" title="Add a &lt;use&gt; element at the next canvas click; set its Href in the inspector to point at a master inside &lt;defs&gt;.">Use</button>
+            </div>
             <div class="section-label">Edit</div>
             <button class="tool-btn" id="btn-duplicate" title="Duplicate selected element offset by (+10, +10)">Duplicate</button>
             <button class="tool-btn" id="btn-snap-precision" title="Round numeric values of the selected element to the current precision">Snap to precision</button>
@@ -129,7 +133,7 @@
                     <div id="geom-fields"></div>
                 </div>
 
-                <div class="group">
+                <div class="group" id="fill-group">
                     <div class="section-label">Fill</div>
                     <div class="row">
                         <label>Color</label>
@@ -143,7 +147,7 @@
                     </div>
                 </div>
 
-                <div class="group">
+                <div class="group" id="stroke-group">
                     <div class="section-label">Stroke</div>
                     <div class="row">
                         <label>Color</label>
@@ -176,6 +180,15 @@
                     <div class="section-label">Points</div>
                     <div id="poly-points"></div>
                     <button id="poly-add-point" class="mini">+ Add point</button>
+                </div>
+
+                <div class="group" id="use-group" hidden>
+                    <div class="section-label">Use</div>
+                    <div class="row">
+                        <label>Href</label>
+                        <input id="i-use-href" type="text" spellcheck="false" autocomplete="off" placeholder="#id">
+                        <button class="mini" id="i-use-href-none" title="Clear href">none</button>
+                    </div>
                 </div>
 
                 <div class="group" id="image-group" hidden>
