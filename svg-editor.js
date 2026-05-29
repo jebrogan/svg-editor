@@ -248,6 +248,53 @@ const TYPES = {
         },
     },
 
+    // Animation types (step I). All four are non-renderable leaves that
+    // live as children of the element they animate (browser resolves the
+    // target by parentage). Attrs are simple string/number key-values —
+    // no parsing into structured forms yet. The inspector exposes the
+    // common SMIL attrs only; full spec attrs (calcMode, keyTimes,
+    // keySplines, additive, accumulate, restart…) are deferred.
+    animate: {
+        defaults: () => ({ attributeName: 'opacity', from: '0', to: '1', dur: '1s', begin: '0s', repeatCount: 'indefinite' }),
+        atPoint: () => ({}),
+        geomFields: [],
+        bbox: null,
+        handles: () => [],
+        applyHandle: () => {},
+        translate: () => {},
+        animation: true,
+    },
+    animateTransform: {
+        defaults: () => ({ attributeName: 'transform', type: 'translate', from: '0 0', to: '100 0', dur: '1s', begin: '0s', repeatCount: 'indefinite', additive: 'sum' }),
+        atPoint: () => ({}),
+        geomFields: [],
+        bbox: null,
+        handles: () => [],
+        applyHandle: () => {},
+        translate: () => {},
+        animation: true,
+    },
+    animateMotion: {
+        defaults: () => ({ path: 'M 0 0 L 100 0', dur: '2s', begin: '0s', repeatCount: 'indefinite', rotate: 'auto' }),
+        atPoint: () => ({}),
+        geomFields: [],
+        bbox: null,
+        handles: () => [],
+        applyHandle: () => {},
+        translate: () => {},
+        animation: true,
+    },
+    set: {
+        defaults: () => ({ attributeName: 'opacity', to: '1', begin: '0s' }),
+        atPoint: () => ({}),
+        geomFields: [],
+        bbox: null,
+        handles: () => [],
+        applyHandle: () => {},
+        translate: () => {},
+        animation: true,
+    },
+
     g: {
         // Container type: holds children, no intrinsic geometry of its own.
         // Created via Ctrl+G (later step), not via a palette tool button, so
@@ -1435,6 +1482,60 @@ function buildGeomFields(el) {
     }
 }
 
+// Toggle the four animation inspector groups based on el.type. Each
+// group's inputs read from el.attrs[<attrName>] — empty string when
+// the attr isn't set, so the user can clear by typing or pressing the
+// "none" button.
+function syncAnimationInspectorGroups(el) {
+    const animateGroup        = document.getElementById('animate-group');
+    const animateTransformGrp = document.getElementById('animate-transform-group');
+    const animateMotionGroup  = document.getElementById('animate-motion-group');
+    const setGroup            = document.getElementById('set-group');
+    if (!animateGroup) return;
+    const show = el && TYPES[el.type] && TYPES[el.type].animation ? el.type : null;
+    animateGroup.hidden        = show !== 'animate';
+    animateTransformGrp.hidden = show !== 'animateTransform';
+    animateMotionGroup.hidden  = show !== 'animateMotion';
+    setGroup.hidden            = show !== 'set';
+    if (!show) return;
+    const a = el.attrs || {};
+    const setVal = (id, val) => setInputValueIfNotFocused(document.getElementById(id), val ?? '');
+    if (show === 'animate') {
+        setVal('i-anim-attr',   a.attributeName);
+        setVal('i-anim-from',   a.from);
+        setVal('i-anim-to',     a.to);
+        setVal('i-anim-by',     a.by);
+        setVal('i-anim-values', a.values);
+        setVal('i-anim-dur',    a.dur);
+        setVal('i-anim-begin',  a.begin);
+        setVal('i-anim-repeat', a.repeatCount);
+    } else if (show === 'animateTransform') {
+        setVal('i-anim-t-attr',     a.attributeName);
+        setVal('i-anim-t-from',     a.from);
+        setVal('i-anim-t-to',       a.to);
+        setVal('i-anim-t-by',       a.by);
+        setVal('i-anim-t-values',   a.values);
+        setVal('i-anim-t-dur',      a.dur);
+        setVal('i-anim-t-begin',    a.begin);
+        setVal('i-anim-t-repeat',   a.repeatCount);
+        const typeSel = document.getElementById('i-anim-t-type');
+        if (document.activeElement !== typeSel) typeSel.value = a.type || 'translate';
+        const addSel = document.getElementById('i-anim-t-additive');
+        if (document.activeElement !== addSel) addSel.value = a.additive || 'replace';
+    } else if (show === 'animateMotion') {
+        setVal('i-anim-m-path',   a.path);
+        setVal('i-anim-m-dur',    a.dur);
+        setVal('i-anim-m-begin',  a.begin);
+        setVal('i-anim-m-repeat', a.repeatCount);
+        setVal('i-anim-m-rotate', a.rotate);
+    } else if (show === 'set') {
+        setVal('i-set-attr',  a.attributeName);
+        setVal('i-set-to',    a.to);
+        setVal('i-set-begin', a.begin);
+        setVal('i-set-dur',   a.dur);
+    }
+}
+
 function updateMultiSelectIndicator() {
     let badge = document.getElementById('multi-select-status');
     if (!badge) {
@@ -1484,11 +1585,12 @@ function updateInspector() {
     updateMultiSelectIndicator();
 
     // Fill / stroke groups are hidden for element types where they have
-    // no reliable effect: <defs> doesn't render at all, and <use> only
-    // applies fill/stroke if its referenced master doesn't already
-    // declare them (SVG inheritance), so showing the controls there is
-    // misleading. Keep the inspector minimal for these.
-    const hidePaint = (el.type === 'defs' || el.type === 'use');
+    // no reliable effect: <defs> doesn't render at all, <use> applies
+    // fill/stroke only when its referenced master doesn't declare them
+    // (SVG inheritance), and animation elements have no paint of their
+    // own. Keep the inspector minimal for these.
+    const isAnimation = TYPES[el.type] && TYPES[el.type].animation;
+    const hidePaint = isAnimation || el.type === 'defs' || el.type === 'use';
     const fillGroup = document.getElementById('fill-group');
     const strokeGroup = document.getElementById('stroke-group');
     if (fillGroup) fillGroup.hidden = hidePaint;
@@ -1527,11 +1629,13 @@ function updateInspector() {
         textGroup.hidden = true;
     }
 
-    // Transform group is applicable to every supported element type.
+    // Transform group is hidden for animation elements (they don't
+    // have a transform attribute themselves) and for the four animation
+    // types' inspector groups. Everything else gets it.
     const transformGroup = document.getElementById('transform-group');
     if (transformGroup) {
-        transformGroup.hidden = false;
-        renderTransformOps(el);
+        transformGroup.hidden = !!isAnimation;
+        if (!isAnimation) renderTransformOps(el);
     }
 
     const pathGroup = document.getElementById('path-group');
@@ -1557,6 +1661,10 @@ function updateInspector() {
     } else {
         useGroup.hidden = true;
     }
+
+    // Show exactly one of the animation inspector groups depending on
+    // el.type; hide the other three. Values come straight from el.attrs.
+    syncAnimationInspectorGroups(el);
 
     // Show "Send to calc" only when something the calculator can consume is selected.
     const sendBtn = document.getElementById('btn-send-to-calc');
@@ -2232,6 +2340,92 @@ function wireInspector() {
         render();
         pushHistory();
     });
+
+    // ----- Animation inspector inputs -----
+    // Each input edits a single attribute on the currently-selected
+    // animation element. Empty input = delete the attr. The "none"
+    // buttons share data-anim-clear / data-anim-t-clear / etc. so we
+    // can wire them with a single delegated listener per group.
+    const wireAnimAttr = (inputId, attrName, requiredType) => {
+        const inp = document.getElementById(inputId);
+        if (!inp) return;
+        inp.addEventListener('input', () => {
+            const el = findElement(state.selectedId);
+            if (!el || el.type !== requiredType) return;
+            const v = inp.value;
+            if (v === '') delete el.attrs[attrName];
+            else el.attrs[attrName] = v;
+            render();
+            pushHistoryDebounced();
+        });
+    };
+    const wireAnimSelect = (selectId, attrName, requiredType, defaultVal) => {
+        const sel = document.getElementById(selectId);
+        if (!sel) return;
+        sel.addEventListener('change', () => {
+            const el = findElement(state.selectedId);
+            if (!el || el.type !== requiredType) return;
+            flushDebounce();
+            if (sel.value === defaultVal) delete el.attrs[attrName];
+            else el.attrs[attrName] = sel.value;
+            render();
+            pushHistory();
+        });
+    };
+    const wireClearButtons = (groupId, datasetKey, requiredType) => {
+        const group = document.getElementById(groupId);
+        if (!group) return;
+        group.addEventListener('click', (e) => {
+            const btn = e.target.closest(`button[${datasetKey}]`);
+            if (!btn) return;
+            const attrName = btn.getAttribute(datasetKey);
+            const el = findElement(state.selectedId);
+            if (!el || el.type !== requiredType) return;
+            flushDebounce();
+            delete el.attrs[attrName];
+            render();
+            pushHistory();
+        });
+    };
+
+    // <animate>
+    wireAnimAttr('i-anim-attr',   'attributeName', 'animate');
+    wireAnimAttr('i-anim-from',   'from',          'animate');
+    wireAnimAttr('i-anim-to',     'to',            'animate');
+    wireAnimAttr('i-anim-by',     'by',            'animate');
+    wireAnimAttr('i-anim-values', 'values',        'animate');
+    wireAnimAttr('i-anim-dur',    'dur',           'animate');
+    wireAnimAttr('i-anim-begin',  'begin',         'animate');
+    wireAnimAttr('i-anim-repeat', 'repeatCount',   'animate');
+    wireClearButtons('animate-group', 'data-anim-clear', 'animate');
+
+    // <animateTransform>
+    wireAnimAttr('i-anim-t-attr',   'attributeName', 'animateTransform');
+    wireAnimAttr('i-anim-t-from',   'from',          'animateTransform');
+    wireAnimAttr('i-anim-t-to',     'to',            'animateTransform');
+    wireAnimAttr('i-anim-t-by',     'by',            'animateTransform');
+    wireAnimAttr('i-anim-t-values', 'values',        'animateTransform');
+    wireAnimAttr('i-anim-t-dur',    'dur',           'animateTransform');
+    wireAnimAttr('i-anim-t-begin',  'begin',         'animateTransform');
+    wireAnimAttr('i-anim-t-repeat', 'repeatCount',   'animateTransform');
+    wireAnimSelect('i-anim-t-type',     'type',     'animateTransform', 'translate');
+    wireAnimSelect('i-anim-t-additive', 'additive', 'animateTransform', 'replace');
+    wireClearButtons('animate-transform-group', 'data-anim-t-clear', 'animateTransform');
+
+    // <animateMotion>
+    wireAnimAttr('i-anim-m-path',   'path',         'animateMotion');
+    wireAnimAttr('i-anim-m-dur',    'dur',          'animateMotion');
+    wireAnimAttr('i-anim-m-begin',  'begin',        'animateMotion');
+    wireAnimAttr('i-anim-m-repeat', 'repeatCount',  'animateMotion');
+    wireAnimAttr('i-anim-m-rotate', 'rotate',       'animateMotion');
+    wireClearButtons('animate-motion-group', 'data-anim-m-clear', 'animateMotion');
+
+    // <set>
+    wireAnimAttr('i-set-attr',  'attributeName', 'set');
+    wireAnimAttr('i-set-to',    'to',            'set');
+    wireAnimAttr('i-set-begin', 'begin',         'set');
+    wireAnimAttr('i-set-dur',   'dur',           'set');
+    wireClearButtons('set-group', 'data-set-clear', 'set');
 }
 
 // ===== Source text =====
@@ -2318,36 +2512,50 @@ function serializeElement(el, indent) {
             parts.push(`transform="${escapeAttr(serializeTransform(a.transform))}"`);
         }
     };
+    // Tag-builder: every element type produces an attribute string and
+    // (for <text>) inline text content; this helper turns those plus any
+    // `children` into either a self-closing tag, a tag with inline text,
+    // or a wrapped open / close pair. Children include nested visible
+    // content (containers) AND animation elements (which can attach to
+    // any parent, including leaves like <rect>).
+    const emit = (tagName, innerText) => {
+        const attrStr = parts.join(' ');
+        const hasChildren = !!(el.children && el.children.length);
+        if (hasChildren) {
+            const childIndent = (indent || 0) + 1;
+            const inner = el.children.map(c => serializeElement(c, childIndent)).join('\n');
+            if (innerText) {
+                return `${pad}<${tagName} ${attrStr}>${innerText}\n${inner}\n${pad}</${tagName}>`;
+            }
+            return `${pad}<${tagName} ${attrStr}>\n${inner}\n${pad}</${tagName}>`;
+        }
+        if (innerText !== undefined && innerText !== '') {
+            return `${pad}<${tagName} ${attrStr}>${innerText}</${tagName}>`;
+        }
+        return `${pad}<${tagName} ${attrStr} />`;
+    };
     if (el.type === 'g') {
         for (const k of ['fill','fill-opacity','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin','opacity']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        if (el.children && el.children.length) {
-            const inner = el.children.map(c => serializeElement(c, (indent || 0) + 1)).join('\n');
-            return `${pad}<g ${parts.join(' ')}>\n${inner}\n${pad}</g>`;
-        }
-        return `${pad}<g ${parts.join(' ')} />`;
+        return emit('g');
     }
     if (el.type === 'defs') {
         addTransform();
-        if (el.children && el.children.length) {
-            const inner = el.children.map(c => serializeElement(c, (indent || 0) + 1)).join('\n');
-            return `${pad}<defs ${parts.join(' ')}>\n${inner}\n${pad}</defs>`;
-        }
-        return `${pad}<defs ${parts.join(' ')} />`;
+        return emit('defs');
     }
     if (el.type === 'use') {
         if (a.href) parts.push(`href="${escapeAttr(a.href)}"`);
         addTransform();
-        return `${pad}<use ${parts.join(' ')} />`;
+        return emit('use');
     }
     if (el.type === 'text') {
         for (const k of ['x','y','font-size','font-family','fill','fill-opacity','stroke','stroke-width','stroke-dasharray']) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        return `${pad}<text ${parts.join(' ')}>${escapeText(a.content ?? '')}</text>`;
+        return emit('text', escapeText(a.content ?? ''));
     }
     if (el.type === 'path') {
         parts.push(`d="${escapeAttr(serializePathData(a.segments))}"`);
@@ -2355,7 +2563,7 @@ function serializeElement(el, indent) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        return `${pad}<path ${parts.join(' ')} />`;
+        return emit('path');
     }
     if (el.type === 'polyline' || el.type === 'polygon') {
         parts.push(`points="${escapeAttr(serializePoints(a.points))}"`);
@@ -2363,7 +2571,7 @@ function serializeElement(el, indent) {
             if (a[k] !== undefined && a[k] !== null && a[k] !== '') parts.push(`${k}="${escapeAttr(a[k])}"`);
         }
         addTransform();
-        return `${pad}<${el.type} ${parts.join(' ')} />`;
+        return emit(el.type);
     }
     if (el.type === 'image') {
         for (const k of ['x','y','width','height','preserveAspectRatio']) {
@@ -2371,7 +2579,7 @@ function serializeElement(el, indent) {
         }
         if (a.href) parts.push(`href="${escapeAttr(a.href)}"`);
         addTransform();
-        return `${pad}<image ${parts.join(' ')} />`;
+        return emit('image');
     }
     for (const [k, v] of Object.entries(a)) {
         if (k === 'content' || k === 'transform') continue;
@@ -2379,7 +2587,7 @@ function serializeElement(el, indent) {
         parts.push(`${k}="${escapeAttr(v)}"`);
     }
     addTransform();
-    return `${pad}<${el.type} ${parts.join(' ')} />`;
+    return emit(el.type);
 }
 
 let canonicalSource = '';
@@ -2443,10 +2651,10 @@ function validateSource(text) {
                 const linePart = line > 0 ? `Line ${line}: ` : '';
                 return `${linePart}element <${tag}> not supported`;
             }
-            if (TYPES[tag].container) {
-                const inner = checkChildren(child);
-                if (inner) return inner;
-            }
+            // Always recurse: leaves can carry animation children, so we
+            // can't gate recursion on container.
+            const inner = checkChildren(child);
+            if (inner) return inner;
         }
         return null;
     }
@@ -2512,12 +2720,13 @@ function applySource() {
         const m = id.match(/-(\d+)$/);
         if (m) idTracker.maxId = Math.max(idTracker.maxId, parseInt(m[1], 10) + 1);
         const childrenOut = [];
-        if (TYPES[type].container) {
-            for (const sub of child.children) {
-                const parsed = parseElementNode(sub);
-                if (parseError) return null;
-                if (parsed) childrenOut.push(parsed);
-            }
+        // Always recurse — non-container elements can carry animation
+        // children (and content like nested <tspan> in <text>, though we
+        // don't model those yet).
+        for (const sub of child.children) {
+            const parsed = parseElementNode(sub);
+            if (parseError) return null;
+            if (parsed) childrenOut.push(parsed);
         }
         return { id, type, attrs, children: childrenOut };
     }
@@ -2665,19 +2874,60 @@ function updateToolUI() {
     canvas.classList.toggle('tool-add', state.tool !== 'select');
 }
 
+// Element types that are added immediately by the palette button rather
+// than via tool-mode + canvas-click. <defs> has no canvas position;
+// animation elements attach to whatever is currently selected.
+const IMMEDIATE_ADD_TYPES = new Set([
+    'defs', 'animate', 'animateTransform', 'animateMotion', 'set',
+]);
+
 palette.addEventListener('click', (e) => {
     const btn = e.target.closest('.tool-btn[data-tool]');
     if (!btn) return;
     const tool = btn.dataset.tool;
-    // <defs> has no canvas position to wait for, so the palette button
-    // adds one immediately rather than entering a tool mode. Every other
-    // Add button still goes through setTool → canvas click → addElement.
     if (tool === 'defs') {
         addDefs();
         return;
     }
+    if (TYPES[tool] && TYPES[tool].animation) {
+        addAnimationChild(tool);
+        return;
+    }
     setTool(tool);
 });
+
+// Add an animation element (<animate>, <animateTransform>, <animateMotion>,
+// <set>) as a child of the currently-selected element. Requires a
+// selection — animations only make sense attached to a parent. The new
+// animation becomes the new selection so its inspector group shows up
+// immediately.
+function addAnimationChild(type) {
+    if (!state.selectedId) {
+        showSourceStatus('Select an element first to add an animation to it', true);
+        return;
+    }
+    const parent = findElement(state.selectedId);
+    if (!parent) return;
+    const def = TYPES[type];
+    if (!def) return;
+    flushDebounce();
+    const anim = {
+        id: nextId(type),
+        type,
+        attrs: { ...def.defaults() },
+        children: [],
+    };
+    if (!Array.isArray(parent.children)) parent.children = [];
+    parent.children.push(anim);
+    // Expand the parent in the outline so the user sees the new row.
+    if (state.outline && state.outline.collapsedNodes) {
+        state.outline.collapsedNodes.delete(parent.id);
+    }
+    outlineBuiltSig = null;
+    selectElement(anim.id);
+    render();
+    pushHistory();
+}
 
 // ===== Selection =====
 // Invariant: when state.selectedId is non-null it is always also a member of
@@ -3458,6 +3708,24 @@ document.getElementById('btn-z-backward').addEventListener('click', () => zMoveS
 document.getElementById('btn-z-back').addEventListener('click',     () => zMoveSelected('back'));
 document.getElementById('btn-group').addEventListener('click',      groupSelected);
 document.getElementById('btn-ungroup').addEventListener('click',    ungroupSelected);
+
+// ===== Animation play / pause =====
+// Default to paused so authoring isn't disrupted by SMIL playback.
+// Adding new animations through the inspector or palette while paused
+// stays paused (animations join the document's paused timeline).
+let animationsPaused = true;
+function applyAnimationPlayState() {
+    try {
+        if (animationsPaused) canvas.pauseAnimations();
+        else                   canvas.unpauseAnimations();
+    } catch (_) {}
+    const btn = document.getElementById('btn-anim-play');
+    if (btn) btn.textContent = animationsPaused ? 'Play' : 'Pause';
+}
+document.getElementById('btn-anim-play').addEventListener('click', () => {
+    animationsPaused = !animationsPaused;
+    applyAnimationPlayState();
+});
 
 // Add an empty <defs> as the first child of the root. Multiple <defs>
 // blocks are allowed — the user can drag them around in the outline like
@@ -4828,6 +5096,10 @@ state.precision = (precVal === 'free') ? 'free' : parseInt(precVal, 10);
 }
 
 render();
+// Animations: paused by default so the user can edit attribute values
+// without things looping in the canvas. The Play button on the topbar
+// toggles canvas.pauseAnimations() / unpauseAnimations().
+applyAnimationPlayState();
 // Rulers depend on the canvas's measured size after layout, so wait one frame.
 if (state.grid.enabled) requestAnimationFrame(renderHtmlRulers);
 // Seed the undo history with the initial state.

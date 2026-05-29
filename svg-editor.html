@@ -51,6 +51,9 @@
                     <option value="595,842">A4 (595 × 842)</option>
                 </select>
             </span>
+            <span class="anim-control" title="Play / pause SMIL animations in the canvas. Paused by default while authoring.">
+                <button id="btn-anim-play" type="button">Play</button>
+            </span>
             <span class="spacer"></span>
             <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
             <button id="btn-redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
@@ -74,6 +77,10 @@
                 <button class="tool-btn" data-tool="image">Image</button>
                 <button class="tool-btn" data-tool="defs" title="Add an empty &lt;defs&gt; block at the top of the tree. Drag elements onto it in the outline to make reusable masters (and leave a &lt;use&gt; behind, unless Shift).">Defs</button>
                 <button class="tool-btn" data-tool="use" title="Add a &lt;use&gt; element at the next canvas click; set its Href in the inspector to point at a master inside &lt;defs&gt;.">Use</button>
+                <button class="tool-btn" data-tool="animate" title="Add an &lt;animate&gt; child to the currently-selected element.">Animate</button>
+                <button class="tool-btn" data-tool="animateTransform" title="Add an &lt;animateTransform&gt; child to the currently-selected element.">AnimateTransform</button>
+                <button class="tool-btn" data-tool="animateMotion" title="Add an &lt;animateMotion&gt; child to the currently-selected element.">AnimateMotion</button>
+                <button class="tool-btn" data-tool="set" title="Add a &lt;set&gt; child (instantaneous attribute change) to the currently-selected element.">Set</button>
             </div>
             <div class="section-label">Edit</div>
             <button class="tool-btn" id="btn-duplicate" title="Duplicate selected element offset by (+10, +10)">Duplicate</button>
@@ -180,6 +187,62 @@
                     <div class="section-label">Points</div>
                     <div id="poly-points"></div>
                     <button id="poly-add-point" class="mini">+ Add point</button>
+                </div>
+
+                <div class="group" id="animate-group" hidden>
+                    <div class="section-label">Animate</div>
+                    <div class="row"><label>attributeName</label><input id="i-anim-attr" type="text" spellcheck="false"></div>
+                    <div class="row"><label>from</label><input id="i-anim-from" type="text" spellcheck="false"><button class="mini" data-anim-clear="from" title="Clear">none</button></div>
+                    <div class="row"><label>to</label><input id="i-anim-to" type="text" spellcheck="false"><button class="mini" data-anim-clear="to" title="Clear">none</button></div>
+                    <div class="row"><label>by</label><input id="i-anim-by" type="text" spellcheck="false"><button class="mini" data-anim-clear="by" title="Clear">none</button></div>
+                    <div class="row"><label>values</label><input id="i-anim-values" type="text" spellcheck="false" placeholder="v1;v2;v3"><button class="mini" data-anim-clear="values" title="Clear">none</button></div>
+                    <div class="row"><label>dur</label><input id="i-anim-dur" type="text" spellcheck="false" placeholder="1s"></div>
+                    <div class="row"><label>begin</label><input id="i-anim-begin" type="text" spellcheck="false" placeholder="0s"></div>
+                    <div class="row"><label>repeatCount</label><input id="i-anim-repeat" type="text" spellcheck="false" placeholder="indefinite"><button class="mini" data-anim-clear="repeatCount" title="Clear">none</button></div>
+                </div>
+
+                <div class="group" id="animate-transform-group" hidden>
+                    <div class="section-label">AnimateTransform</div>
+                    <div class="row"><label>attributeName</label><input id="i-anim-t-attr" type="text" spellcheck="false" value="transform"></div>
+                    <div class="row"><label>type</label>
+                        <select id="i-anim-t-type">
+                            <option value="translate">translate</option>
+                            <option value="rotate">rotate</option>
+                            <option value="scale">scale</option>
+                            <option value="skewX">skewX</option>
+                            <option value="skewY">skewY</option>
+                        </select>
+                    </div>
+                    <div class="row"><label>from</label><input id="i-anim-t-from" type="text" spellcheck="false"><button class="mini" data-anim-t-clear="from" title="Clear">none</button></div>
+                    <div class="row"><label>to</label><input id="i-anim-t-to" type="text" spellcheck="false"><button class="mini" data-anim-t-clear="to" title="Clear">none</button></div>
+                    <div class="row"><label>by</label><input id="i-anim-t-by" type="text" spellcheck="false"><button class="mini" data-anim-t-clear="by" title="Clear">none</button></div>
+                    <div class="row"><label>values</label><input id="i-anim-t-values" type="text" spellcheck="false" placeholder="v1;v2;v3"><button class="mini" data-anim-t-clear="values" title="Clear">none</button></div>
+                    <div class="row"><label>dur</label><input id="i-anim-t-dur" type="text" spellcheck="false" placeholder="1s"></div>
+                    <div class="row"><label>begin</label><input id="i-anim-t-begin" type="text" spellcheck="false" placeholder="0s"></div>
+                    <div class="row"><label>repeatCount</label><input id="i-anim-t-repeat" type="text" spellcheck="false" placeholder="indefinite"><button class="mini" data-anim-t-clear="repeatCount" title="Clear">none</button></div>
+                    <div class="row"><label>additive</label>
+                        <select id="i-anim-t-additive">
+                            <option value="replace">replace</option>
+                            <option value="sum">sum</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="group" id="animate-motion-group" hidden>
+                    <div class="section-label">AnimateMotion</div>
+                    <div class="row"><label>path</label><input id="i-anim-m-path" type="text" spellcheck="false" placeholder="M 0 0 L 100 0"></div>
+                    <div class="row"><label>dur</label><input id="i-anim-m-dur" type="text" spellcheck="false" placeholder="2s"></div>
+                    <div class="row"><label>begin</label><input id="i-anim-m-begin" type="text" spellcheck="false" placeholder="0s"></div>
+                    <div class="row"><label>repeatCount</label><input id="i-anim-m-repeat" type="text" spellcheck="false" placeholder="indefinite"><button class="mini" data-anim-m-clear="repeatCount" title="Clear">none</button></div>
+                    <div class="row"><label>rotate</label><input id="i-anim-m-rotate" type="text" spellcheck="false" placeholder="auto / auto-reverse / number"></div>
+                </div>
+
+                <div class="group" id="set-group" hidden>
+                    <div class="section-label">Set</div>
+                    <div class="row"><label>attributeName</label><input id="i-set-attr" type="text" spellcheck="false"></div>
+                    <div class="row"><label>to</label><input id="i-set-to" type="text" spellcheck="false"></div>
+                    <div class="row"><label>begin</label><input id="i-set-begin" type="text" spellcheck="false" placeholder="0s"></div>
+                    <div class="row"><label>dur</label><input id="i-set-dur" type="text" spellcheck="false"><button class="mini" data-set-clear="dur" title="Clear">none</button></div>
                 </div>
 
                 <div class="group" id="use-group" hidden>
