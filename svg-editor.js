@@ -4233,11 +4233,24 @@ function buildOutlineDOM() {
         row.appendChild(idSpan);
 
         row.addEventListener('click', (ev) => {
+            // Suppress the click after a drag (pointerup that finished a
+            // reparent fires a click on the original row, which would re-
+            // select and clobber multi-selection). The drag handler sets
+            // outlineDragJustEnded for one tick.
+            if (outlineDragJustEnded) return;
             if (ev.shiftKey || ev.ctrlKey || ev.metaKey) {
                 toggleElementInSelection(el.id);
             } else {
                 selectElement(el.id);
             }
+        });
+
+        row.addEventListener('pointerdown', (ev) => {
+            // Only the primary button initiates an outline drag. Triangle
+            // clicks are handled above (stopPropagation), so they don't
+            // reach here.
+            if (ev.button !== 0) return;
+            startOutlineDrag(ev, row, el.id);
         });
 
         container.appendChild(row);
@@ -4264,6 +4277,202 @@ function renderOutline() {
         row.classList.toggle('selected', state.selectedIds.has(id));
         row.classList.toggle('primary', id === state.selectedId);
     }
+}
+
+// ===== Outline drag-to-reparent (step G) =====
+// State machine: pointerdown on a row arms outlineDrag with pending=true.
+// The actual reparent drag only "starts" once the pointer has moved past
+// OUTLINE_DRAG_THRESHOLD pixels — under that, pointerup is treated as a
+// click and the click handler does its normal selection.
+//
+// While dragging, the row(s) being moved get `.dragging`, and the current
+// drop target gets `.drop-before`, `.drop-after`, or `.drop-inside`.
+// On pointerup, if the drop is valid, the tree is mutated and the moved
+// elements stay selected (selectedIds is untouched).
+let outlineDrag = null;
+let outlineDragJustEnded = false;
+const OUTLINE_DRAG_THRESHOLD = 4;
+
+function startOutlineDrag(ev, row, rowId) {
+    // If the pointerdown landed on the disclosure triangle, leave the
+    // event alone — its own click handler should toggle the subtree.
+    // (Capturing the pointer here would re-target the synthetic click
+    // onto the row per the Pointer Events spec, and the triangle's
+    // handler would never fire.)
+    if (ev.target && ev.target.classList &&
+        ev.target.classList.contains('outline-triangle')) return;
+    // If the row is in the current selection, drag the whole selection;
+    // otherwise drag just this row. Either way, prune descendants so a
+    // selected ancestor's children don't get re-inserted under it.
+    const ids = state.selectedIds.has(rowId)
+        ? new Set(state.selectedIds)
+        : new Set([rowId]);
+    const draggedIds = new Set(pruneDescendantsFromSet(ids));
+    if (draggedIds.size === 0) return;
+    outlineDrag = {
+        rowId,
+        draggedIds,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        moved: false,
+        captured: false,
+        captureEl: row,
+        pointerId: ev.pointerId,
+    };
+    // Pointer capture is deferred until the pointer crosses the drag
+    // threshold (see onOutlineDragMove). That keeps the synthetic click
+    // routed to its real target — important for the disclosure triangle
+    // and for the row's own selection click handler.
+    row.addEventListener('pointermove', onOutlineDragMove);
+    row.addEventListener('pointerup',   onOutlineDragEnd);
+    row.addEventListener('pointercancel', onOutlineDragEnd);
+}
+
+function onOutlineDragMove(ev) {
+    if (!outlineDrag) return;
+    if (!outlineDrag.moved) {
+        const dx = ev.clientX - outlineDrag.startX;
+        const dy = ev.clientY - outlineDrag.startY;
+        if (Math.abs(dx) < OUTLINE_DRAG_THRESHOLD &&
+            Math.abs(dy) < OUTLINE_DRAG_THRESHOLD) return;
+        outlineDrag.moved = true;
+        // Now we're committed to a drag: take pointer capture so we keep
+        // getting move / up events even when the pointer leaves the row,
+        // and dim the dragged rows.
+        try {
+            outlineDrag.captureEl.setPointerCapture(outlineDrag.pointerId);
+            outlineDrag.captured = true;
+        } catch (_) {}
+        const container = document.getElementById('outline-tree');
+        if (container) {
+            for (const r of container.querySelectorAll('.outline-row')) {
+                if (outlineDrag.draggedIds.has(r.dataset.elementId)) {
+                    r.classList.add('dragging');
+                }
+            }
+        }
+    }
+    updateOutlineDropTarget(ev.clientX, ev.clientY);
+}
+
+function onOutlineDragEnd(ev) {
+    if (!outlineDrag) return;
+    const captureEl = outlineDrag.captureEl;
+    const moved = outlineDrag.moved;
+    const captured = outlineDrag.captured;
+    const drop = outlineDrag.dropTarget; // {targetId, zone} or null
+    const draggedIds = outlineDrag.draggedIds;
+    if (captured) {
+        try { captureEl.releasePointerCapture(outlineDrag.pointerId); } catch (_) {}
+    }
+    captureEl.removeEventListener('pointermove', onOutlineDragMove);
+    captureEl.removeEventListener('pointerup',   onOutlineDragEnd);
+    captureEl.removeEventListener('pointercancel', onOutlineDragEnd);
+    clearOutlineDropIndicators();
+    outlineDrag = null;
+    if (moved && drop) {
+        // Suppress the synthetic click that immediately follows pointerup
+        // on the dragged row (would re-select it). One-tick guard.
+        outlineDragJustEnded = true;
+        setTimeout(() => { outlineDragJustEnded = false; }, 0);
+        flushDebounce();
+        const ok = applyOutlineDrop(Array.from(draggedIds), drop.targetId, drop.zone);
+        if (ok) {
+            outlineBuiltSig = null;
+            render();
+            pushHistory();
+        }
+    }
+}
+
+// Walk all visible outline rows; pick the one the pointer is over; decide
+// which third of the row (before / after / inside). Returns null when the
+// pointer is not over a valid row or the drop would be invalid.
+function updateOutlineDropTarget(clientX, clientY) {
+    const container = document.getElementById('outline-tree');
+    if (!container) return;
+    clearOutlineDropIndicators();
+    outlineDrag.dropTarget = null;
+    let hit = null;
+    for (const row of container.querySelectorAll('.outline-row')) {
+        const rect = row.getBoundingClientRect();
+        if (clientY >= rect.top && clientY < rect.bottom) {
+            hit = { row, rect };
+            break;
+        }
+    }
+    if (!hit) return;
+    const targetId = hit.row.dataset.elementId;
+    if (!isValidOutlineDropTarget(outlineDrag.draggedIds, targetId)) return;
+    const targetEl = findElement(targetId);
+    if (!targetEl) return;
+    const ratio = (clientY - hit.rect.top) / hit.rect.height;
+    let zone;
+    const isContainer = !!TYPES[targetEl.type] && !!TYPES[targetEl.type].container;
+    if (ratio < 0.33) zone = 'before';
+    else if (ratio > 0.67) zone = 'after';
+    else if (isContainer) zone = 'inside';
+    else zone = (ratio < 0.5) ? 'before' : 'after';
+    outlineDrag.dropTarget = { targetId, zone };
+    hit.row.classList.add('drop-' + zone);
+}
+
+// A drop is invalid if the target IS one of the dragged ids (can't reparent
+// to self) or is a descendant of any dragged id (would create a cycle).
+function isValidOutlineDropTarget(draggedIds, targetId) {
+    if (draggedIds.has(targetId)) return false;
+    let info = findElementInfo(targetId);
+    while (info && info.parent) {
+        if (draggedIds.has(info.parent.id)) return false;
+        info = findElementInfo(info.parent.id);
+    }
+    return true;
+}
+
+function clearOutlineDropIndicators() {
+    const container = document.getElementById('outline-tree');
+    if (!container) return;
+    for (const row of container.querySelectorAll('.outline-row')) {
+        row.classList.remove('drop-before', 'drop-after', 'drop-inside');
+    }
+}
+
+// Apply the reparent. `draggedIds` are removed from their current parents
+// (in document order so refs stay valid via direct splice on the resolved
+// objects) and re-inserted at the target location.
+function applyOutlineDrop(draggedIds, targetId, zone) {
+    const idSet = new Set(draggedIds);
+    // Resolve to actual element objects in document order so we preserve
+    // the relative ordering of the dragged subset after the move.
+    const orderedRefs = [];
+    walkTree((el) => { if (idSet.has(el.id)) orderedRefs.push(el); });
+    if (!orderedRefs.length) return false;
+    // Remove from current locations. Each splice may invalidate earlier
+    // findElementInfo lookups for other dragged refs, so we re-lookup
+    // for each one.
+    for (const el of orderedRefs) {
+        const info = findElementInfo(el.id);
+        if (!info) continue;
+        info.siblings.splice(info.idx, 1);
+    }
+    // Now find the target (its position may have shifted as a side effect
+    // of the removals above).
+    if (zone === 'inside') {
+        const tEl = findElement(targetId);
+        if (!tEl) return false;
+        if (!Array.isArray(tEl.children)) tEl.children = [];
+        tEl.children.push(...orderedRefs);
+        // Expand the target so the user can see where the drop landed.
+        if (state.outline && state.outline.collapsedNodes) {
+            state.outline.collapsedNodes.delete(targetId);
+        }
+        return true;
+    }
+    const tInfo = findElementInfo(targetId);
+    if (!tInfo) return false;
+    const insertIdx = (zone === 'before') ? tInfo.idx : (tInfo.idx + 1);
+    tInfo.siblings.splice(insertIdx, 0, ...orderedRefs);
+    return true;
 }
 
 function applyOutlineVisibility() {
